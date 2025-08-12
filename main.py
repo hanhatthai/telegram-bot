@@ -104,57 +104,57 @@ def get_ethbtc_7d_pct_change():
         return None
 
 
+
 def get_defi_tvl_7d_pct_change():
     """
-    Sử dụng DefiLlama v2 historicalChainTVL endpoint cho 'all' chains.
-    Trả về % thay đổi 7 ngày (float) hoặc None nếu lỗi.
+    Lấy % thay đổi DeFi TVL trong 7 ngày qua từ DefiLlama v2 API.
     """
     try:
         url = "https://api.llama.fi/v2/historicalChainTVL/all"
         r = requests.get(url, timeout=15)
         r.raise_for_status()
         data = r.json()
+
         if not isinstance(data, list) or len(data) < 2:
-            print("defillama: not enough data")
+            print("defillama: data format invalid")
             return None
 
-        # data items: [{"date": 169..., "tvl": 12345}, ...] (date timestamp)
-        # sắp xếp theo date nếu cần
+        # Sắp xếp theo ngày
         data.sort(key=lambda x: x.get("date", 0))
-        # latest
         latest = data[-1]
-        latest_tvl = latest.get("tvl") or latest.get("totalLiquidityUSD") or None
-        if latest_tvl is None:
+        latest_tvl = latest.get("tvl") or latest.get("totalLiquidityUSD")
+        if not latest_tvl:
             print("defillama: latest tvl missing")
             return None
 
-        latest_date = datetime.utcfromtimestamp(int(latest.get("date")))
+        latest_date = datetime.utcfromtimestamp(int(latest["date"]))
         target_date = latest_date - timedelta(days=7)
 
-        # tìm entry gần nhất với target_date (dùng abs days)
+        # Tìm TVL gần nhất 7 ngày trước
         tvl_7d = None
-        best_diff = None
+        closest_diff = None
         for entry in data:
             try:
-                ed = datetime.utcfromtimestamp(int(entry.get("date")))
-                diff_days = abs((ed - target_date).days)
-                if best_diff is None or diff_days < best_diff:
-                    best_diff = diff_days
+                entry_date = datetime.utcfromtimestamp(int(entry["date"]))
+                diff_days = abs((entry_date - target_date).days)
+                if closest_diff is None or diff_days < closest_diff:
+                    closest_diff = diff_days
                     tvl_7d = entry.get("tvl") or entry.get("totalLiquidityUSD")
-            except Exception:
+            except:
                 continue
 
-        if tvl_7d is None:
-            print("defillama: no 7d-back point found")
+        if not tvl_7d:
+            print("defillama: no tvl point 7d back found")
             return None
 
-        pct = (latest_tvl - tvl_7d) / tvl_7d * 100.0
-        return round(pct, 2)
+        pct_change = (latest_tvl - tvl_7d) / tvl_7d * 100.0
+        return round(pct_change, 2)
+
     except requests.HTTPError as e:
-        print("defillama HTTP error", e)
+        print("defillama HTTP error:", e)
         return None
     except Exception as e:
-        print("defillama error", e)
+        print("defillama error:", e)
         return None
 
 
