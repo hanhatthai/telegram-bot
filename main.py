@@ -1,118 +1,104 @@
-
 import os
 import requests
-import datetime
+from flask import Flask, request
+from datetime import datetime
 import pytz
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+import threading
+import time
+import schedule
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# --------- Hàm lấy dữ liệu ---------
-def get_btc_dominance():
-    url = "https://api.coingecko.com/api/v3/global"
-    r = requests.get(url).json()
-    return r["data"]["market_cap_percentage"]["btc"]
+app = Flask(__name__)
 
-def get_total_market_cap():
-    url = "https://api.coingecko.com/api/v3/global"
-    r = requests.get(url).json()
-    return r["data"]["total_market_cap"]["usd"]
-
-def get_eth_btc_change_7d():
-    url = "https://api.coingecko.com/api/v3/coins/markets"
-    params = {"vs_currency": "btc", "ids": "ethereum"}
-    r = requests.get(url, params=params).json()
-    return r[0]["price_change_percentage_7d_in_currency"]
-
-def get_defi_tvl_change_7d():
-    # API mới của DefiLlama
-    url = "https://api.llama.fi/overview/defi?excludeTotalChart=true&excludeTotalDataChart=true"
-    r = requests.get(url).json()
-    chains = r.get("protocols", [])
-    if not chains:
-        return None
-    # tính % thay đổi trung bình
-    tvl_changes = [p.get("change_7d", 0) for p in chains if p.get("change_7d") is not None]
-    if not tvl_changes:
-        return None
-    return sum(tvl_changes) / len(tvl_changes)
-
-def get_funding_rate_avg():
-    url = "https://api.coinglass.com/api/futures/funding_rates"
-    headers = {"coinglassSecret": os.getenv("COINGLASS_API_KEY", "")}
+def get_crypto_data():
     try:
-        r = requests.get(url, headers=headers).json()
-        rates = [x["fundingRate"] for x in r.get("data", []) if x.get("fundingRate") is not None]
-        if rates:
-            return sum(rates) / len(rates)
-    except:
-        return None
-    return None
+        btc_dom = requests.get("https://api.coingecko.com/api/v3/global").json()
+        btc_dominance = btc_dom["data"]["market_cap_percentage"]["btc"]
+        total_mcap = btc_dom["data"]["total_market_cap"]["usd"]
 
-def get_stablecoin_netflow():
-    # Ví dụ giả định dùng API CryptoQuant (cần key)
-    return None  # Placeholder
+        eth_btc = requests.get(
+            "https://api.coingecko.com/api/v3/coins/ethereum"
+        ).json()["market_data"]["price_change_percentage_7d_in_currency"]["btc"]
 
-def get_alt_btc_volume_ratio():
-    # Dùng dữ liệu khối lượng từ CoinGecko
-    url = "https://api.coingecko.com/api/v3/global"
-    r = requests.get(url).json()
-    total_volume = r["data"]["total_volume"]["usd"]
-    btc_volume = total_volume * (r["data"]["market_cap_percentage"]["btc"] / 100)
-    alt_volume = total_volume - btc_volume
-    return alt_volume / btc_volume if btc_volume > 0 else None
+        # New DeFiLlama endpoint
+        defi_data = requests.get("https://api.llama.fi/overview/tvl").json()
+        defi_tvl_change_7d = defi_data["change_7d"]
 
-def get_altcoin_season_index():
-    try:
-        r = requests.get("https://api.blockchaincenter.net/api/altcoin-season-index").json()
-        return r.get("seasonIndex")
-    except:
-        return None
+        funding_data = requests.get(
+            "https://api.coinglass.com/api/funding"
+        ).json()  # giả định bạn có API key
 
-# --------- Hàm tạo báo cáo ---------
-def create_report():
-    tz = pytz.timezone("Asia/Ho_Chi_Minh")
-    now = datetime.datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+        funding_avg = sum([x["fundingRate"] for x in funding_data["data"]]) / len(funding_data["data"])
 
-    btc_dom = get_btc_dominance()
-    total_mc = get_total_market_cap()
-    eth_btc_7d = get_eth_btc_change_7d()
-    defi_tvl_7d = get_defi_tvl_change_7d()
-    funding_avg = get_funding_rate_avg()
-    alt_btc_ratio = get_alt_btc_volume_ratio()
-    alt_season_idx = get_altcoin_season_index()
+        alt_index = requests.get(
+            "https://www.blockchaincenter.net/api/altcoin-season-index"
+        ).json()["seasonIndex"]
 
-    report = f"📊 Crypto Daily Report — {now} (GMT+7)\n\n"
-    report += f"1) BTC Dominance: {btc_dom:.2f}%\n"
-    report += f"2) Total Market Cap: ${total_mc:,.0f}\n"
-    report += f"3) ETH/BTC 7d change: {eth_btc_7d:+.2f}%\n"
-    report += f"4) DeFi TVL 7d change: {defi_tvl_7d:+.2f}%\n" if defi_tvl_7d is not None else "4) DeFi TVL 7d change: N/A\n"
-    report += f"5) Funding avg: {funding_avg:+.6f}\n" if funding_avg is not None else "5) Funding avg: N/A\n"
-    report += f"6) Alt/BTC Volume Ratio: {alt_btc_ratio:.2f}\n" if alt_btc_ratio is not None else "6) Alt/BTC Volume Ratio: N/A\n"
-    report += f"7) Altcoin Season Index: {alt_season_idx}\n" if alt_season_idx is not None else "7) Altcoin Season Index: N/A\n"
+        alt_mcap = total_mcap * (1 - btc_dominance / 100)
 
-    # Ghi chú cảnh báo
-    report += "\n⚠️ Điều kiện cảnh báo Altcoin Season:\n"
-    report += "- ETH/BTC tăng > 3% (7d)\n"
-    report += "- Funding Rate dương\n"
-    report += "- BTC Dominance giảm < 50%\n"
-    report += "- Altcoin Season Index > 75\n"
-    report += "\nCode by: HNT"
+        signals = []
+        if eth_btc > 3:
+            signals.append("ETH/BTC > +3% (7d)")
+        if funding_avg > 0:
+            signals.append("Funding Rate dương")
+        if alt_index >= 75:
+            signals.append("Altcoin Season Index >= 75")
 
-    return report
+        tz = pytz.timezone("Asia/Ho_Chi_Minh")
+        now_vn = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
 
-# --------- Lệnh Telegram ---------
-async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    report = create_report()
-    await update.message.reply_text(report)
+        report = f"""📊 Crypto Daily Report — {now_vn} VN
 
-# --------- Main ---------
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("check", check_command))
-    app.run_polling()
+1) BTC Dominance: {btc_dominance:.2f}%
+2) Total Market Cap: ${total_mcap:,.0f}
+3) Altcoin Market Cap (est): ${alt_mcap:,.0f}
+4) ETH/BTC 7d change: {eth_btc:+.2f}%
+5) DeFi TVL 7d change: {defi_tvl_change_7d:+.2f}%
+6) Funding avg sample: {funding_avg:+.6f}
+7) Altcoin Season Index: {alt_index}
 
-if __name__ == "__main__":
-    main()
+⚡ Signals triggered: {len(signals)}
+- """ + "\n- ".join(signals) + """
+
+📌 Ghi chú:
+- ETH/BTC > +3% (7d) + Funding Rate dương + Altcoin Season Index >= 75 → Altcoin Season có thể đến trong 2–6 tuần.
+- Theo dõi hằng ngày để xác nhận xu hướng.
+- Đây không phải lời khuyên đầu tư.
+
+Code by: HNT
+"""
+        return report
+    except Exception as e:
+        return f"Lỗi khi lấy dữ liệu: {e}"
+
+def send_report():
+    text = get_crypto_data()
+    if BOT_TOKEN and CHAT_ID:
+        requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={"chat_id": CHAT_ID, "text": text}
+        )
+
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+def webhook():
+    data = request.get_json()
+    if "message" in data and "text" in data["message"]:
+        text = data["message"]["text"]
+        chat_id = data["message"]["chat"]["id"]
+        if text.strip().lower() == "/check":
+            report = get_crypto_data()
+            requests.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                json={"chat_id": chat_id, "text": report}
+            )
+    return {"ok": True}
+
+def scheduler():
+    schedule.every().day.at("07:00").do(send_report)
+    while True:
+        schedule.run_pending()
+        time.sleep(30)
+
+threading.Thread(target=scheduler, daemon=True).start()
