@@ -1,3 +1,5 @@
 requests
 python-telegram-bot==20.3
 pytz
+beautifulsoup4
+lxml
