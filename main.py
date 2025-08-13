@@ -211,6 +211,7 @@ async def send_daily(context: ContextTypes.DEFAULT_TYPE):
 # ----------------- Flask + Thread -----------------
 from flask import Flask
 import threading
+import asyncio
 
 app = Flask(__name__)
 
@@ -221,6 +222,11 @@ def home():
 def start_bot():
     if not BOT_TOKEN:
         raise SystemExit("Missing BOT_TOKEN env.")
+
+    # Tạo event loop mới cho thread
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     tg_app = ApplicationBuilder().token(BOT_TOKEN).build()
     tg_app.add_handler(CommandHandler("check", check))
     tg_app.job_queue.run_daily(send_daily, time=dt.time(hour=7, tzinfo=HCM_TZ))
