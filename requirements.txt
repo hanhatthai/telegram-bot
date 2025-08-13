@@ -1,6 +1,3 @@
 requests
-python-telegram-bot
+python-telegram-bot==20.3
 pytz
-schedule
-flask
-gunicorn
