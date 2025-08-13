@@ -7,6 +7,7 @@ import requests
 from typing import Optional, List
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.constants import ParseMode
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 CHAT_ID = os.getenv("CHAT_ID", "")
@@ -162,12 +163,12 @@ def build_report():
     alt_btc_ratio = get_alt_btc_spot_volume_ratio()
     season_idx = get_altcoin_season_index()
 
-    s_ethbtc = ethbtc_7d and ethbtc_7d > 3
-    s_funding = funding_avg and funding_avg > 0
-    s_netflow = netflow_m and netflow_m > 0
-    s_ratio = alt_btc_ratio and alt_btc_ratio > 1.5
-    s_index = season_idx and season_idx > 75
-    count_active = sum(bool(x) for x in [s_ethbtc, s_funding, s_netflow, s_ratio, s_index])
+    s_ethbtc = bool(ethbtc_7d is not None and ethbtc_7d > 3)
+    s_funding = bool(funding_avg is not None and funding_avg > 0)
+    s_netflow = bool(netflow_m is not None and netflow_m > 0)
+    s_ratio = bool(alt_btc_ratio is not None and alt_btc_ratio > 1.5)
+    s_index = bool(season_idx is not None and season_idx > 75)
+    count_active = sum([s_ethbtc, s_funding, s_netflow, s_ratio, s_index])
 
     level = None
     if count_active >= 4 and s_index:
@@ -177,36 +178,72 @@ def build_report():
     elif 2 <= count_active <= 3:
         level = "Early Signal"
 
+    # Header + metrics
     lines = [
-        f"📊 Crypto Daily Report — {now} (GMT+7)",
+        f"📊 <b>Crypto Daily Report</b> — {now} (GMT+7)",
         "",
-        f"1️⃣ BTC Dominance: {btc_dom:.2f}% 🧊" if btc_dom else "1️⃣ BTC Dominance: N/A 🧊",
+        f"1️⃣ BTC Dominance: {btc_dom:.2f}% 🧊" if btc_dom is not None else "1️⃣ BTC Dominance: N/A 🧊",
         f"2️⃣ Total Market Cap: {_fmt_usd(total_mc)} 💰",
         f"3️⃣ Altcoin Market Cap (est): {_fmt_usd(altcap)} 🔷",
-        f"4️⃣ ETH/BTC 7d change: {ethbtc_7d:+.2f}% ✅" if ethbtc_7d else "4️⃣ ETH/BTC 7d change: N/A ❔",
-        f"5️⃣ DeFi TVL 7d change: {defi_7d:+.2f}% 🧭" if defi_7d else "5️⃣ DeFi TVL 7d change: N/A 🧭",
-        f"6️⃣ Funding Rate avg: {funding_avg:+.6f} {'📈' if funding_avg >=0 else '📉'}" if funding_avg else "6️⃣ Funding Rate avg: N/A 📈",
-        f"7️⃣ Stablecoin Netflow (CEX): {netflow_m:+.0f} M {'🔼' if netflow_m>=0 else '🔽'}" if netflow_m else "7️⃣ Stablecoin Netflow (CEX): N/A",
-        f"8️⃣ Alt/BTC Volume Ratio: {alt_btc_ratio:.2f} ✅" if s_ratio else f"8️⃣ Alt/BTC Volume Ratio: {alt_btc_ratio:.2f}" if alt_btc_ratio else "8️⃣ Alt/BTC Volume Ratio: N/A",
-        f"9️⃣ Altcoin Season Index (BC): {season_idx} 🟢" if s_index else f"9️⃣ Altcoin Season Index (BC): {season_idx}" if season_idx else "9️⃣ Altcoin Season Index (BC): N/A",
+        f"4️⃣ ETH/BTC 7d change: {ethbtc_7d:+.2f}% ✅" if ethbtc_7d is not None else "4️⃣ ETH/BTC 7d change: N/A ❔",
+        f"5️⃣ DeFi TVL 7d change: {defi_7d:+.2f}% 🧭" if defi_7d is not None else "5️⃣ DeFi TVL 7d change: N/A 🧭",
+        f"6️⃣ Funding Rate avg: {funding_avg:+.6f} {'📈' if (funding_avg or 0) >= 0 else '📉'}" if funding_avg is not None else "6️⃣ Funding Rate avg: N/A 📈",
+        f"7️⃣ Stablecoin Netflow (CEX): {netflow_m:+.0f} M {'🔼' if (netflow_m or 0) >= 0 else '🔽'}" if netflow_m is not None else "7️⃣ Stablecoin Netflow (CEX): N/A",
+        f"8️⃣ Alt/BTC Volume Ratio: {alt_btc_ratio:.2f} ✅" if s_ratio else (f"8️⃣ Alt/BTC Volume Ratio: {alt_btc_ratio:.2f}" if alt_btc_ratio is not None else "8️⃣ Alt/BTC Volume Ratio: N/A"),
+        f"9️⃣ Altcoin Season Index (BC): {season_idx} 🟢" if s_index else (f"9️⃣ Altcoin Season Index (BC): {season_idx}" if season_idx is not None else "9️⃣ Altcoin Season Index (BC): N/A"),
+        ""
     ]
+
+    # Signals checklist
+    lines += [
+        "— <b>Tín hiệu kích hoạt</b>:",
+        f"{'✅' if s_ethbtc else '❌'} ETH/BTC > +3% (7d)",
+        f"{'✅' if s_funding else '❌'} Funding Rate dương",
+        f"{'✅' if s_netflow else '❌'} Stablecoin Netflow > 0",
+        f"{'✅' if s_ratio else '❌'} Alt/BTC Volume Ratio > 1.5",
+        f"{'✅' if s_index else '❌'} Altcoin Season Index > 75",
+    ]
+
+    # Level section
     if level:
-        lines.append("")
-        lines.append("— *Cảnh báo Altseason*:")
+        lines += [
+            "",
+            "— <b>Cảnh báo Altseason</b>:",
+        ]
         if level == "Altseason Confirmed":
-            lines.append("🔥 Altseason Confirmed — khả năng trong ~1–2 tuần")
+            lines.append("🔥 <b>Altseason Confirmed</b> — khả năng trong ~1–2 tuần")
         elif level == "Strong Signal":
-            lines.append("🔥 Strong Signal — nhiều điều kiện đã kích hoạt")
+            lines.append("🔥 <b>Strong Signal</b> — nhiều điều kiện đã kích hoạt")
         elif level == "Early Signal":
-            lines.append("🔥 Early Signal — đang hình thành, cần theo dõi")
+            lines.append("🔥 <b>Early Signal</b> — đang hình thành, cần theo dõi")
+
+    # Notes
+    lines += [
+        "",
+        "— <i>Ghi chú</i>:",
+        "• Stablecoin netflow dương ⇒ dòng tiền sắp giải ngân.",
+        "• Alt/BTC volume ratio > 1.5 ⇒ altcoin volume vượt BTC.",
+        "• Altseason Index > 75 ⇒ xu hướng altseason rõ ràng.",
+        "<i>Code by: HNT</i>",
+    ]
+
     return "\n".join(lines)
 
 # ----------------- Telegram -----------------
 async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(build_report(), disable_web_page_preview=True)
+    await update.message.reply_text(
+        build_report(),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
 
 async def send_daily(context: ContextTypes.DEFAULT_TYPE):
-    await context.bot.send_message(chat_id=CHAT_ID, text=build_report(), disable_web_page_preview=True)
+    await context.bot.send_message(
+        chat_id=CHAT_ID,
+        text=build_report(),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
 
 # ----------------- Flask + Thread -----------------
 from flask import Flask
@@ -227,7 +264,7 @@ def start_bot():
     tg_app = ApplicationBuilder().token(BOT_TOKEN).build()
     tg_app.add_handler(CommandHandler("check", check))
     tg_app.job_queue.run_daily(send_daily, time=dt.time(hour=7, tzinfo=HCM_TZ))
-    tg_app.run_polling(stop_signals=None)  # FIX: chạy được trong thread phụ
+    tg_app.run_polling(stop_signals=None)  # cho phép chạy trong thread phụ
 
 threading.Thread(target=start_bot, daemon=True).start()
 
