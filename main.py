@@ -226,7 +226,6 @@ def start_bot():
     tg_app.job_queue.run_daily(send_daily, time=dt.time(hour=7, tzinfo=HCM_TZ))
     tg_app.run_polling()
 
-# Chạy bot song song với Flask
 threading.Thread(target=start_bot).start()
 
 if __name__ == "__main__":
