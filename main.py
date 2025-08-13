@@ -117,7 +117,6 @@ def get_stablecoin_netflow_cex_usd():
         )
         if not html:
             return None
-        # Regex đã fix lỗi
         pattern = r'netflow_total["\']?\s*[:=]\s*([-+]?\d+(?:\.\d+)?)'
         candidates = [float(m.group(1)) for m in re.finditer(pattern, html)]
         if not candidates:
@@ -190,13 +189,6 @@ def build_report():
         f"7️⃣ Stablecoin Netflow (CEX): {netflow_m:+.0f} M {'🔼' if netflow_m>=0 else '🔽'}" if netflow_m else "7️⃣ Stablecoin Netflow (CEX): N/A",
         f"8️⃣ Alt/BTC Volume Ratio: {alt_btc_ratio:.2f} ✅" if s_ratio else f"8️⃣ Alt/BTC Volume Ratio: {alt_btc_ratio:.2f}" if alt_btc_ratio else "8️⃣ Alt/BTC Volume Ratio: N/A",
         f"9️⃣ Altcoin Season Index (BC): {season_idx} 🟢" if s_index else f"9️⃣ Altcoin Season Index (BC): {season_idx}" if season_idx else "9️⃣ Altcoin Season Index (BC): N/A",
-        "",
-        "— *Tín hiệu kích hoạt*:",
-        f"✅ ETH/BTC > +3% (7d) {'🟢' if s_ethbtc else '⚪'}",
-        f"✅ Funding Rate dương {'🟢' if s_funding else '⚪'}",
-        f"✅ Stablecoin NetFlow > 0 {'🟢' if s_netflow else '⚪'}",
-        f"✅ Alt/BTC Volume Ratio > 1.5 {'🟢' if s_ratio else '⚪'}",
-        f"✅ Altcoin Season Index > 75 {'🟢' if s_index else '⚪'}",
     ]
     if level:
         lines.append("")
@@ -207,14 +199,6 @@ def build_report():
             lines.append("🔥 Strong Signal — nhiều điều kiện đã kích hoạt")
         elif level == "Early Signal":
             lines.append("🔥 Early Signal — đang hình thành, cần theo dõi")
-    lines += [
-        "",
-        "— *Ghi chú*:",
-        "- Stablecoin inflow ⇒ dòng tiền sắp giải ngân.",
-        "- Alt/BTC Volume Ratio > 1.5 ⇒ altcoin volume vượt BTC.",
-        "- Altcoin Season Index > 75 ⇒ altseason rõ ràng.",
-        "*Code by: HNT*"
-    ]
     return "\n".join(lines)
 
 # ----------------- Telegram -----------------
@@ -224,7 +208,17 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def send_daily(context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(chat_id=CHAT_ID, text=build_report(), disable_web_page_preview=True)
 
-def main():
+# ----------------- Flask + Thread -----------------
+from flask import Flask
+import threading
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running"
+
+def start_bot():
     if not BOT_TOKEN:
         raise SystemExit("Missing BOT_TOKEN env.")
     tg_app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -232,13 +226,8 @@ def main():
     tg_app.job_queue.run_daily(send_daily, time=dt.time(hour=7, tzinfo=HCM_TZ))
     tg_app.run_polling()
 
-# Flask app cho Railway
-from flask import Flask
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "Bot is running"
+# Chạy bot song song với Flask
+threading.Thread(target=start_bot).start()
 
 if __name__ == "__main__":
-    main()
+    app.run(host="0.0.0.0", port=8080)
