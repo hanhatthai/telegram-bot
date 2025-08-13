@@ -4,7 +4,7 @@ import math
 import datetime as dt
 import pytz
 import requests
-from typing import Optional, Tuple, List
+from typing import Optional, List
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
@@ -37,7 +37,7 @@ def _safe_get_text(url: str, **kwargs):
 
 def _parse_number_candidates(text: str) -> List[float]:
     nums = []
-    for m in re.finditer(r"[-+]?\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?|[-+]?\\d+(?:\\.\\d+)?", text):
+    for m in re.finditer(r"[-+]?\d{1,3}(?:,\d{3})*(?:\.\d+)?|[-+]?\d+(?:\.\d+)?", text):
         s = m.group(0).replace(",", "")
         try:
             nums.append(float(s))
@@ -111,11 +111,15 @@ def get_stablecoin_netflow_cex_usd():
         except:
             pass
     try:
-        html = _safe_get_text("https://cryptoquant.com/asset/stablecoin/chart/exchange-flows/netflow/all_exchange",
-                              headers={"User-Agent": "Mozilla/5.0"})
-        candidates = []
-        for m in re.finditer(r'netflow_total["\\']?\\s*[:=]\\s*([-+]?\\d+(?:\\.\\d+)?)', html):
-            candidates.append(float(m.group(1)))
+        html = _safe_get_text(
+            "https://cryptoquant.com/asset/stablecoin/chart/exchange-flows/netflow/all_exchange",
+            headers={"User-Agent": "Mozilla/5.0"}
+        )
+        if not html:
+            return None
+        # Regex đã fix lỗi
+        pattern = r'netflow_total["\']?\s*[:=]\s*([-+]?\d+(?:\.\d+)?)'
+        candidates = [float(m.group(1)) for m in re.finditer(pattern, html)]
         if not candidates:
             tail = html[-5000:]
             candidates.extend(_parse_number_candidates(tail))
@@ -211,7 +215,7 @@ def build_report():
         "- Altcoin Season Index > 75 ⇒ altseason rõ ràng.",
         "*Code by: HNT*"
     ]
-    return "\\n".join(lines)
+    return "\n".join(lines)
 
 # ----------------- Telegram -----------------
 async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -223,13 +227,10 @@ async def send_daily(context: ContextTypes.DEFAULT_TYPE):
 def main():
     if not BOT_TOKEN:
         raise SystemExit("Missing BOT_TOKEN env.")
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("check", check))
-    app.job_queue.run_daily(send_daily, time=dt.time(hour=7, tzinfo=HCM_TZ))
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+    tg_app = ApplicationBuilder().token(BOT_TOKEN).build()
+    tg_app.add_handler(CommandHandler("check", check))
+    tg_app.job_queue.run_daily(send_daily, time=dt.time(hour=7, tzinfo=HCM_TZ))
+    tg_app.run_polling()
 
 # Flask app cho Railway
 from flask import Flask
