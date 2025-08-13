@@ -1,104 +1,165 @@
 import os
 import requests
-from flask import Flask, request
+import logging
 from datetime import datetime
 import pytz
-import threading
-import time
-import schedule
+from flask import Flask, request
+from telegram import Bot
 
+# Logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Config
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+CHAT_ID = os.getenv("CHAT_ID")  # ID nhóm hoặc cá nhân Telegram
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN chưa được đặt trong Environment Variables")
 
+bot = Bot(token=BOT_TOKEN)
 app = Flask(__name__)
 
-def get_crypto_data():
+# Hàm lấy dữ liệu an toàn
+def safe_request(url, headers=None):
     try:
-        btc_dom = requests.get("https://api.coingecko.com/api/v3/global").json()
-        btc_dominance = btc_dom["data"]["market_cap_percentage"]["btc"]
-        total_mcap = btc_dom["data"]["total_market_cap"]["usd"]
+        r = requests.get(url, headers=headers, timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        logger.error(f"Lỗi khi lấy dữ liệu từ {url}: {e}")
+        return None
 
-        eth_btc = requests.get(
-            "https://api.coingecko.com/api/v3/coins/ethereum"
-        ).json()["market_data"]["price_change_percentage_7d_in_currency"]["btc"]
+# API lấy dữ liệu
+def get_btc_dominance():
+    data = safe_request("https://api.coingecko.com/api/v3/global")
+    if data:
+        return round(data["data"]["market_cap_percentage"]["btc"], 2)
+    return "N/A"
 
-        # New DeFiLlama endpoint
-        defi_data = requests.get("https://api.llama.fi/overview/tvl").json()
-        defi_tvl_change_7d = defi_data["change_7d"]
+def get_market_caps():
+    data = safe_request("https://api.coingecko.com/api/v3/global")
+    if data:
+        total = data["data"]["total_market_cap"]["usd"]
+        btc_d = data["data"]["market_cap_percentage"]["btc"] / 100
+        alt = total * (1 - btc_d)
+        return total, alt
+    return "N/A", "N/A"
 
-        funding_data = requests.get(
-            "https://api.coinglass.com/api/funding"
-        ).json()  # giả định bạn có API key
+def get_eth_btc_change():
+    data = safe_request(
+        "https://api.coingecko.com/api/v3/coins/ethereum/market_chart?vs_currency=btc&days=7"
+    )
+    if data and "prices" in data:
+        prices = [p[1] for p in data["prices"]]
+        change = ((prices[-1] - prices[0]) / prices[0]) * 100
+        return round(change, 2)
+    return "N/A"
 
-        funding_avg = sum([x["fundingRate"] for x in funding_data["data"]]) / len(funding_data["data"])
+def get_defi_tvl_change():
+    data = safe_request("https://api.llama.fi/v2/historicalChainTvl")
+    if data:
+        if isinstance(data, list) and len(data) >= 8:
+            last = sum(chain.get("tvl", 0) for chain in data[-1].values())
+            prev = sum(chain.get("tvl", 0) for chain in data[-8].values())
+            change = ((last - prev) / prev) * 100 if prev else 0
+            return round(change, 2)
+    return "N/A"
 
-        alt_index = requests.get(
-            "https://www.blockchaincenter.net/api/altcoin-season-index"
-        ).json()["seasonIndex"]
+def get_funding_rate():
+    data = safe_request("https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=10")
+    if data:
+        avg_rate = sum(float(x["fundingRate"]) for x in data) / len(data)
+        return round(avg_rate, 8)
+    return "N/A"
 
-        alt_mcap = total_mcap * (1 - btc_dominance / 100)
+def get_altcoin_season_index():
+    headers = {"User-Agent": "Mozilla/5.0"}
+    data = safe_request("https://www.blockchaincenter.net/api/altcoin-season-index", headers=headers)
+    if data and "season" in data:
+        return data["season"]
+    return "N/A"
 
-        signals = []
-        if eth_btc > 3:
-            signals.append("ETH/BTC > +3% (7d)")
-        if funding_avg > 0:
-            signals.append("Funding Rate dương")
-        if alt_index >= 75:
-            signals.append("Altcoin Season Index >= 75")
+# Format số
+def fmt_usd(x):
+    if isinstance(x, (int, float)):
+        return "${:,.0f}".format(x)
+    return x
 
-        tz = pytz.timezone("Asia/Ho_Chi_Minh")
-        now_vn = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+# Hàm tạo báo cáo
+def generate_report():
+    tz = pytz.timezone("Asia/Ho_Chi_Minh")
+    now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
 
-        report = f"""📊 Crypto Daily Report — {now_vn} VN
+    btc_d = get_btc_dominance()
+    total_mc, alt_mc = get_market_caps()
+    eth_btc = get_eth_btc_change()
+    defi_tvl = get_defi_tvl_change()
+    funding = get_funding_rate()
+    alt_season = get_altcoin_season_index()
 
-1) BTC Dominance: {btc_dominance:.2f}%
-2) Total Market Cap: ${total_mcap:,.0f}
-3) Altcoin Market Cap (est): ${alt_mcap:,.0f}
-4) ETH/BTC 7d change: {eth_btc:+.2f}%
-5) DeFi TVL 7d change: {defi_tvl_change_7d:+.2f}%
-6) Funding avg sample: {funding_avg:+.6f}
-7) Altcoin Season Index: {alt_index}
+    signals = []
+    if isinstance(eth_btc, (int, float)) and eth_btc > 3:
+        signals.append("ETH/BTC > +3% (7d)")
+    if isinstance(funding, (int, float)) and funding > 0:
+        signals.append("Funding Rate positive")
+    if isinstance(alt_season, (int, float)) and alt_season >= 75:
+        signals.append("Altcoin Season Index >= 75")
 
-⚡ Signals triggered: {len(signals)}
-- """ + "\n- ".join(signals) + """
+    report = f"""📊 Crypto Daily Report — {now} (GMT+7)
 
-📌 Ghi chú:
-- ETH/BTC > +3% (7d) + Funding Rate dương + Altcoin Season Index >= 75 → Altcoin Season có thể đến trong 2–6 tuần.
-- Theo dõi hằng ngày để xác nhận xu hướng.
-- Đây không phải lời khuyên đầu tư.
+1) BTC Dominance: {btc_d}%
+2) Total Market Cap: {fmt_usd(total_mc)}
+3) Altcoin Market Cap (est): {fmt_usd(alt_mc)}
+4) ETH/BTC 7d change: {eth_btc}%
+5) DeFi TVL 7d change: {defi_tvl}%
+6) Funding avg sample: {funding}
+7) Altcoin Season Index: {alt_season}
+
+⚠️ Signals triggered: {len(signals)} — {", ".join(signals) if signals else "Không có tín hiệu"}
+
+📌 Chú ý:
+- ≥2 tín hiệu mạnh ⇒ có thể 2–4 tuần tới altcoin season.
+- Altcoin Season Index ≥ 75 ⇒ thường đang trong giai đoạn altseason.
+- Funding rate dương ⇒ phe long chiếm ưu thế.
+
+💡 Điều kiện để mua mạnh hơn: BTC.D giảm + ETH/BTC tăng mạnh + Funding Rate dương.
 
 Code by: HNT
 """
-        return report
-    except Exception as e:
-        return f"Lỗi khi lấy dữ liệu: {e}"
+    return report
 
-def send_report():
-    text = get_crypto_data()
-    if BOT_TOKEN and CHAT_ID:
-        requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={"chat_id": CHAT_ID, "text": text}
-        )
-
+# Endpoint Telegram webhook
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
 def webhook():
-    data = request.get_json()
-    if "message" in data and "text" in data["message"]:
-        text = data["message"]["text"]
-        chat_id = data["message"]["chat"]["id"]
+    update = request.get_json()
+    if "message" in update and "text" in update["message"]:
+        chat_id = update["message"]["chat"]["id"]
+        text = update["message"]["text"]
         if text.strip().lower() == "/check":
-            report = get_crypto_data()
-            requests.post(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                json={"chat_id": chat_id, "text": report}
-            )
-    return {"ok": True}
+            report = generate_report()
+            bot.send_message(chat_id=chat_id, text=report)
+    return "OK"
 
-def scheduler():
-    schedule.every().day.at("07:00").do(send_report)
+# Endpoint test
+@app.route("/")
+def index():
+    return "Bot is running."
+
+# Gửi tự động 7h sáng
+import threading, time
+
+def auto_send():
     while True:
-        schedule.run_pending()
-        time.sleep(30)
+        tz = pytz.timezone("Asia/Ho_Chi_Minh")
+        now = datetime.now(tz)
+        if now.hour == 7 and now.minute == 0:
+            report = generate_report()
+            if CHAT_ID:
+                bot.send_message(chat_id=CHAT_ID, text=report)
+            time.sleep(60)
+        time.sleep(20)
 
-threading.Thread(target=scheduler, daemon=True).start()
+threading.Thread(target=auto_send, daemon=True).start()
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8080)
