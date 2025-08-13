@@ -222,17 +222,14 @@ def home():
 def start_bot():
     if not BOT_TOKEN:
         raise SystemExit("Missing BOT_TOKEN env.")
-
-    # Tạo event loop mới cho thread
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-
     tg_app = ApplicationBuilder().token(BOT_TOKEN).build()
     tg_app.add_handler(CommandHandler("check", check))
     tg_app.job_queue.run_daily(send_daily, time=dt.time(hour=7, tzinfo=HCM_TZ))
-    tg_app.run_polling()
+    tg_app.run_polling(stop_signals=None)  # FIX: chạy được trong thread phụ
 
-threading.Thread(target=start_bot).start()
+threading.Thread(target=start_bot, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
