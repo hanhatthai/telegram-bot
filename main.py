@@ -76,7 +76,6 @@ def get_eth_btc_change_7d_pct():
         return None
 
 def get_defi_tvl_change_7d_pct():
-    # API chính
     data = _safe_get_json("https://api.llama.fi/charts/defi")
     try:
         if data and len(data) >= 8:
@@ -86,7 +85,6 @@ def get_defi_tvl_change_7d_pct():
                 return (last_val - prev_val) / prev_val * 100
     except:
         pass
-    # Backup
     data2 = _safe_get_json("https://api.llama.fi/overview/total?excludeTotalChart=false")
     try:
         chart = data2.get("totalDataChart", [])
@@ -109,7 +107,6 @@ def get_funding_rate_avg():
         return None
 
 def get_stablecoin_netflow_cex_usd():
-    # WhalePortal API
     try:
         js = _safe_get_json("https://whaleportal.com/api/stablecoin-netflows")
         if isinstance(js, list) and js:
@@ -118,7 +115,6 @@ def get_stablecoin_netflow_cex_usd():
                 return float(latest["netflow"]) / 1_000_000
     except:
         pass
-    # HTML scrape backup
     html = _safe_get_text("https://whaleportal.com/stablecoin-netflows")
     if html:
         m = re.search(r'Netflow[^>]*\+?(-?\d+(?:\.\d+)?)\s*M', html)
@@ -145,21 +141,18 @@ def get_alt_btc_spot_volume_ratio():
     return alt_vol / btc_vol if btc_vol > 0 else None
 
 def get_altcoin_season_index():
-    # API chính
     try:
         data = _safe_get_json("https://api.blockchaincenter.net/api/altcoin-season")
         if data and "index" in data:
             return int(round(float(data["index"])))
     except:
         pass
-    # Backup API 2
     try:
         data = _safe_get_json("https://api.blockchaincenter.net/api/altcoin-season-index")
         if data and isinstance(data, dict) and "index" in data:
             return int(round(float(data["index"])))
     except:
         pass
-    # Scrape HTML (font-size:88px)
     html = _safe_get_text("https://www.blockchaincenter.net/altcoin-season-index/")
     if html:
         m = re.search(r'font-size:88px;[^>]*>(\d{1,3})<', html)
@@ -198,24 +191,17 @@ def build_report():
         level = "Early Signal"
 
     lines = [f"📊 <b>Crypto Daily Report</b> — {now} (GMT+7)", ""]
-    if btc_dom is not None:
-        lines.append(f"1️⃣ BTC Dominance: {btc_dom:.2f}% 🧊")
-    if total_mc is not None:
-        lines.append(f"2️⃣ Total Market Cap: {_fmt_usd(total_mc)} 💰")
-    if altcap is not None:
-        lines.append(f"3️⃣ Altcoin Market Cap (est): {_fmt_usd(altcap)} 🔷")
-    if ethbtc_7d is not None:
-        lines.append(f"4️⃣ ETH/BTC 7d change: {ethbtc_7d:+.2f}% {'✅' if s_ethbtc else ''}")
-    if defi_7d is not None:
-        lines.append(f"5️⃣ DeFi TVL 7d change: {defi_7d:+.2f}% 🧭")
-    if funding_avg is not None:
-        lines.append(f"6️⃣ Funding Rate avg: {funding_avg:+.6f} {'📈' if funding_avg >= 0 else '📉'}")
-    if netflow_m is not None:
-        lines.append(f"7️⃣ Stablecoin Netflow (CEX): {netflow_m:+.0f} M {'🔼' if netflow_m >= 0 else '🔽'}")
-    if alt_btc_ratio is not None:
-        lines.append(f"8️⃣ Alt/BTC Volume Ratio: {alt_btc_ratio:.2f} {'✅' if s_ratio else ''}")
-    if season_idx is not None:
-        lines.append(f"9️⃣ Altcoin Season Index (BC): {season_idx} {'🟢' if s_index else ''}")
+
+    # Luôn hiển thị đủ 9 mục
+    lines.append(f"1️⃣ BTC Dominance: {btc_dom:.2f}% 🧊" if btc_dom is not None else "1️⃣ BTC Dominance: N/A 🧊")
+    lines.append(f"2️⃣ Total Market Cap: {_fmt_usd(total_mc)} 💰" if total_mc is not None else "2️⃣ Total Market Cap: N/A 💰")
+    lines.append(f"3️⃣ Altcoin Market Cap (est): {_fmt_usd(altcap)} 🔷" if altcap is not None else "3️⃣ Altcoin Market Cap (est): N/A 🔷")
+    lines.append(f"4️⃣ ETH/BTC 7d change: {ethbtc_7d:+.2f}% {'✅' if s_ethbtc else ''}" if ethbtc_7d is not None else "4️⃣ ETH/BTC 7d change: N/A")
+    lines.append(f"5️⃣ DeFi TVL 7d change: {defi_7d:+.2f}% 🧭" if defi_7d is not None else "5️⃣ DeFi TVL 7d change: N/A 🧭")
+    lines.append(f"6️⃣ Funding Rate avg: {funding_avg:+.6f} {'📈' if funding_avg >= 0 else '📉'}" if funding_avg is not None else "6️⃣ Funding Rate avg: N/A")
+    lines.append(f"7️⃣ Stablecoin Netflow (CEX): {netflow_m:+.0f} M {'🔼' if netflow_m >= 0 else '🔽'}" if netflow_m is not None else "7️⃣ Stablecoin Netflow (CEX): N/A")
+    lines.append(f"8️⃣ Alt/BTC Volume Ratio: {alt_btc_ratio:.2f} {'✅' if s_ratio else ''}" if alt_btc_ratio is not None else "8️⃣ Alt/BTC Volume Ratio: N/A")
+    lines.append(f"9️⃣ Altcoin Season Index (BC): {season_idx} {'🟢' if s_index else ''}" if season_idx is not None else "9️⃣ Altcoin Season Index (BC): N/A")
 
     lines += ["", "— <b>Tín hiệu kích hoạt</b>:"]
     lines.append(f"{'✅' if s_ethbtc else '❌'} ETH/BTC > +3% (7d)")
