@@ -22,7 +22,9 @@ def _fmt_usd(n: Optional[float]) -> str:
 
 def _safe_get_json(url: str, **kwargs):
     try:
-        r = requests.get(url, timeout=25, **kwargs)
+        headers = kwargs.pop("headers", {})
+        headers.setdefault("User-Agent", "Mozilla/5.0")
+        r = requests.get(url, timeout=25, headers=headers, **kwargs)
         r.raise_for_status()
         return r.json()
     except:
@@ -30,7 +32,9 @@ def _safe_get_json(url: str, **kwargs):
 
 def _safe_get_text(url: str, **kwargs):
     try:
-        r = requests.get(url, timeout=25, **kwargs)
+        headers = kwargs.pop("headers", {})
+        headers.setdefault("User-Agent", "Mozilla/5.0")
+        r = requests.get(url, timeout=25, headers=headers, **kwargs)
         r.raise_for_status()
         return r.text
     except:
@@ -83,13 +87,38 @@ def get_eth_btc_change_7d_pct():
         return None
 
 def get_defi_tvl_change_7d_pct():
-    url = "https://api.llama.fi/overview/defi?excludeTotalChart=true&excludeTotalDataChart=true"
+    """
+    Lấy tổng TVL time-series từ DefiLlama rồi tự tính % thay đổi 7 ngày.
+    Ổn định hơn so với đọc từng protocol.
+    """
+    url = "https://api.llama.fi/overview/total?excludeTotalDataChart=false&excludeTotalChart=true"
     data = _safe_get_json(url)
     try:
-        arr = [p.get("change_7d") for p in data.get("protocols", []) if p.get("change_7d") is not None]
-        return sum(arr) / len(arr) if arr else None
+        chart = (data.get("totalDataChart") or data.get("totalDefiChart") or [])
+        if len(chart) < 8:
+            return None
+
+        def _ts_sec(ts):
+            return ts / 1000 if ts > 1_000_000_000_000 else ts
+
+        last_ts, last_val = chart[-1]
+        last_ts = _ts_sec(last_ts)
+        target = last_ts - 7 * 86400
+
+        prev_val = None
+        for t, v in reversed(chart):
+            t = _ts_sec(t)
+            if t <= target:
+                prev_val = v
+                break
+        if prev_val is None:
+            prev_val = chart[-8][1]
+
+        if prev_val and prev_val != 0:
+            return (last_val - prev_val) / prev_val * 100.0
     except:
-        return None
+        pass
+    return None
 
 def get_funding_rate_avg():
     url = "https://fapi.binance.com/fapi/v1/premiumIndex"
@@ -101,6 +130,10 @@ def get_funding_rate_avg():
         return None
 
 def get_stablecoin_netflow_cex_usd():
+    """
+    Ưu tiên CryptoQuant API (cần CRYPTOQUANT_API_KEY).
+    Nếu không có key, nhiều khi server bị chặn khi scrape => có thể trả None.
+    """
     if CRYPTOQUANT_API_KEY:
         try:
             url = "https://api.cryptoquant.com/v1/stablecoin/exchange-flows/netflow"
@@ -111,10 +144,11 @@ def get_stablecoin_netflow_cex_usd():
                 return float(js["netflow_total"]) / 1_000_000
         except:
             pass
+
+    # Fallback (có thể bị chặn tuỳ IP)
     try:
         html = _safe_get_text(
             "https://cryptoquant.com/asset/stablecoin/chart/exchange-flows/netflow/all_exchange",
-            headers={"User-Agent": "Mozilla/5.0"}
         )
         if not html:
             return None
@@ -144,11 +178,30 @@ def get_alt_btc_spot_volume_ratio():
     return alt_vol / btc_vol if btc_vol > 0 else None
 
 def get_altcoin_season_index():
+    # Thử API JSON
     data = _safe_get_json("https://api.blockchaincenter.net/api/altcoin-season-index")
     try:
-        return int(round(float(data.get("seasonIndex"))))
+        if data:
+            for key in ("seasonIndex", "altcoinSeasonIndex", "index"):
+                if key in data:
+                    return int(round(float(data[key])))
     except:
-        return None
+        pass
+    # Fallback HTML
+    try:
+        html = _safe_get_text("https://www.blockchaincenter.net/altcoin-season-index/")
+        if not html:
+            return None
+        m = re.search(r'seasonIndex[^:\d]*[:=]\s*([0-9]{1,3})', html)
+        if not m:
+            m = re.search(r'Altcoin Season Index[^0-9]+([0-9]{1,3})', html, re.I)
+        if m:
+            val = int(m.group(1))
+            if 0 <= val <= 100:
+                return val
+    except:
+        pass
+    return None
 
 # ----------------- Report -----------------
 def build_report():
@@ -178,7 +231,6 @@ def build_report():
     elif 2 <= count_active <= 3:
         level = "Early Signal"
 
-    # Header + metrics
     lines = [
         f"📊 <b>Crypto Daily Report</b> — {now} (GMT+7)",
         "",
@@ -191,11 +243,7 @@ def build_report():
         f"7️⃣ Stablecoin Netflow (CEX): {netflow_m:+.0f} M {'🔼' if (netflow_m or 0) >= 0 else '🔽'}" if netflow_m is not None else "7️⃣ Stablecoin Netflow (CEX): N/A",
         f"8️⃣ Alt/BTC Volume Ratio: {alt_btc_ratio:.2f} ✅" if s_ratio else (f"8️⃣ Alt/BTC Volume Ratio: {alt_btc_ratio:.2f}" if alt_btc_ratio is not None else "8️⃣ Alt/BTC Volume Ratio: N/A"),
         f"9️⃣ Altcoin Season Index (BC): {season_idx} 🟢" if s_index else (f"9️⃣ Altcoin Season Index (BC): {season_idx}" if season_idx is not None else "9️⃣ Altcoin Season Index (BC): N/A"),
-        ""
-    ]
-
-    # Signals checklist
-    lines += [
+        "",
         "— <b>Tín hiệu kích hoạt</b>:",
         f"{'✅' if s_ethbtc else '❌'} ETH/BTC > +3% (7d)",
         f"{'✅' if s_funding else '❌'} Funding Rate dương",
@@ -203,21 +251,14 @@ def build_report():
         f"{'✅' if s_ratio else '❌'} Alt/BTC Volume Ratio > 1.5",
         f"{'✅' if s_index else '❌'} Altcoin Season Index > 75",
     ]
-
-    # Level section
     if level:
         lines += [
             "",
             "— <b>Cảnh báo Altseason</b>:",
+            "🔥 <b>Altseason Confirmed</b> — khả năng trong ~1–2 tuần" if level == "Altseason Confirmed"
+            else "🔥 <b>Strong Signal</b> — nhiều điều kiện đã kích hoạt" if level == "Strong Signal"
+            else "🔥 <b>Early Signal</b> — đang hình thành, cần theo dõi"
         ]
-        if level == "Altseason Confirmed":
-            lines.append("🔥 <b>Altseason Confirmed</b> — khả năng trong ~1–2 tuần")
-        elif level == "Strong Signal":
-            lines.append("🔥 <b>Strong Signal</b> — nhiều điều kiện đã kích hoạt")
-        elif level == "Early Signal":
-            lines.append("🔥 <b>Early Signal</b> — đang hình thành, cần theo dõi")
-
-    # Notes
     lines += [
         "",
         "— <i>Ghi chú</i>:",
@@ -226,7 +267,6 @@ def build_report():
         "• Altseason Index > 75 ⇒ xu hướng altseason rõ ràng.",
         "<i>Code by: HNT</i>",
     ]
-
     return "\n".join(lines)
 
 # ----------------- Telegram -----------------
@@ -264,7 +304,7 @@ def start_bot():
     tg_app = ApplicationBuilder().token(BOT_TOKEN).build()
     tg_app.add_handler(CommandHandler("check", check))
     tg_app.job_queue.run_daily(send_daily, time=dt.time(hour=7, tzinfo=HCM_TZ))
-    tg_app.run_polling(stop_signals=None)  # cho phép chạy trong thread phụ
+    tg_app.run_polling(stop_signals=None)
 
 threading.Thread(target=start_bot, daemon=True).start()
 
