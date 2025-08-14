@@ -46,7 +46,7 @@ def _safe_get_text(url: str, **kwargs):
 def _fmt_usd(n: Optional[float]) -> str:
     if n is None or (isinstance(n, float) and (math.isnan(n) or math.isinf(n))):
         return "N/A"
-    return f"${n:,.2f}" if n < 1_000_000 else f\"${n:,.0f}\"
+    return f"${n:,.2f}" if n < 1_000_000 else f"${n:,.0f}"
 
 def _pct(v: Optional[float]) -> Optional[str]:
     return f"{v:+.2f}%" if v is not None else None
