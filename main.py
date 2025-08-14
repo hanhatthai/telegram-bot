@@ -1,4 +1,3 @@
-# main.py
 import os
 import re
 import math
@@ -76,56 +75,26 @@ def get_eth_btc_change_7d_pct():
     except:
         return None
 
-def _compute_7d_change_from_series(series):
-    """series: list of dict with date(int, seconds) and tvl(float)"""
-    if not series or len(series) < 8:
-        return None
-    today_ts = int(dt.datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
-    filtered = [p for p in series if p["date"] <= today_ts]
-    if len(filtered) < 8:
-        return None
-    last_val = float(filtered[-1]["tvl"])
-    prev_val = float(filtered[-8]["tvl"])
-    if prev_val != 0:
-        return (last_val - prev_val) / prev_val * 100
-    return None
-
 def get_defi_tvl_change_7d_pct():
-    # API mới của DeFiLlama (tổng TVL global theo ngày)
-    data = _safe_get_json("https://api.llama.fi/v2/historicalChainTvl")
-    if isinstance(data, list):
-        try:
-            pct = _compute_7d_change_from_series(data)
-            if isinstance(pct, (int, float)):
-                return pct
-        except:
-            pass
-
-    # Fallback scrape CSV từ trang chủ DefiLlama (nếu có)
-    html = _safe_get_text("https://defillama.com/")
-    if html:
-        m = re.search(r'href="([^"]+\.csv)"', html)
-        if m:
-            csv_url = m.group(1)
-            if csv_url.startswith("/"):
-                csv_url = "https://defillama.com" + csv_url
-            csv_text = _safe_get_text(csv_url)
-            if csv_text:
-                rows = [row.strip() for row in csv_text.splitlines() if row.strip()]
-                if rows and ("tvl" in rows[0].lower() or "date" in rows[0].lower()):
-                    rows = rows[1:]
-                series = []
-                for row in rows:
-                    parts = row.split(",")
-                    if len(parts) >= 2:
-                        try:
-                            ts = int(dt.datetime.fromisoformat(parts[0].replace("Z","")).timestamp())
-                            tvl = float(parts[1])
-                            series.append({"date": ts, "tvl": tvl})
-                        except:
-                            continue
-                series.sort(key=lambda x: x["date"])
-                return _compute_7d_change_from_series(series)
+    data = _safe_get_json("https://api.llama.fi/charts/defi")
+    try:
+        if data and len(data) >= 8:
+            last_val = data[-1][1]
+            prev_val = data[-8][1]
+            if prev_val:
+                return (last_val - prev_val) / prev_val * 100
+    except:
+        pass
+    data2 = _safe_get_json("https://api.llama.fi/overview/total?excludeTotalChart=false")
+    try:
+        chart = data2.get("totalDataChart", [])
+        if len(chart) >= 8:
+            last_val = chart[-1][1]
+            prev_val = chart[-8][1]
+            if prev_val:
+                return (last_val - prev_val) / prev_val * 100
+    except:
+        pass
     return None
 
 def get_funding_rate_avg():
@@ -137,86 +106,23 @@ def get_funding_rate_avg():
     except:
         return None
 
-# ---------- NEW: Stablecoin Netflow (CEX) — ưu tiên full-day hôm qua ----------
-def _parse_magnitude_to_millions(s: str) -> Optional[float]:
-    """
-    Chuyển chuỗi dạng '755.7M', '2.3B', '-12.4K', '246,989,608.74' thành triệu USD (float).
-    """
-    if not s:
-        return None
-    ss = s.strip().replace(",", "")
-    m = re.match(r'^(-?\d+(?:\.\d+)?)([KMB])?$', ss)
-    if m:
-        val = float(m.group(1))
-        suf = m.group(2)
-        if not suf:  # số tuyệt đối
-            return val / 1_000_000.0
-        if suf == 'K':
-            return val / 1_000.0
-        if suf == 'M':
-            return val
-        if suf == 'B':
-            return val * 1_000.0
-    # số tuyệt đối có phần nghìn, không có suffix
-    try:
-        return float(ss) / 1_000_000.0
-    except:
-        return None
-
 def get_stablecoin_netflow_cex_usd():
-    """
-    Cố gắng lấy Stablecoin Netflow (CEX) theo thứ tự:
-      1) Trang chart: lấy cột gần nhất KHÔNG có 'Incomplete data' (tức là hôm qua) -> triệu USD
-      2) Fallback trang danh sách metrics 'Exchange Flows': tìm hàng 'Exchange Netflow (Total)' -> triệu USD
-      3) Thất bại -> None (để hiển thị N/A)
-    """
-    # 1) Trang chart (ưu tiên lấy full-day hôm qua)
-    chart_url = (
-        "https://cryptoquant.com/asset/stablecoin/chart/exchange-flows/exchange-netflow-total"
-        "?exchange=all_exchange&window=DAY&sma=0&ema=0&priceScale=linear&chartStyle=column"
-    )
-    html = _safe_get_text(chart_url)
+    try:
+        js = _safe_get_json("https://whaleportal.com/api/stablecoin-netflows")
+        if isinstance(js, list) and js:
+            latest = js[-1]
+            if "netflow" in latest:
+                return float(latest["netflow"]) / 1_000_000
+    except:
+        pass
+    html = _safe_get_text("https://whaleportal.com/stablecoin-netflows")
     if html:
-        # Tìm các tooltip dạng:
-        # "2025 Aug 14 (Incomplete data), UTC ... Exchange Netflow (Total) 246,989,608.74"
-        # "2025 Aug 13, UTC ... Exchange Netflow (Total) 432,123,456.78"
-        matches = list(re.finditer(
-            r'(\d{4}\s+\w+\s+\d{1,2})(?:\s*\(Incomplete data\))?,\s*UTC.*?Exchange Netflow\s*\(Total\)\s*([\-0-9,\.]+)',
-            html, flags=re.DOTALL
-        ))
-        for mobj in reversed(matches):
-            date_str = mobj.group(1)
-            # Bỏ qua hôm nay nếu có "Incomplete data" đi kèm (không bắt trong group 1 nhưng có thể xác định bằng cách tìm lại đoạn gần)
-            span_start = max(0, mobj.start() - 120)
-            snippet = html[span_start:mobj.end()]
-            if "Incomplete data" in snippet:
-                continue
-            val_abs_str = mobj.group(2)
-            mm = _parse_magnitude_to_millions(val_abs_str)
-            if mm is not None:
-                return mm
-
-    # 2) Fallback: trang danh sách metrics (Last Value)
-    list_url = "https://cryptoquant.com/asset/stablecoin/chart/exchange-flows"
-    html2 = _safe_get_text(list_url)
-    if html2:
-        # Xác định hàng chứa 'Exchange Netflow (Total)' rồi bắt giá trị trong title="...M|B|K"
-        row = re.search(r'Exchange Netflow\s*\(Total\).*?</tr>', html2, flags=re.IGNORECASE | re.DOTALL)
-        if row:
-            # trước hết thử lấy title="...M|B|K"
-            m_title = re.search(r'title="([\-0-9\.,]+[KMB]?)"', row.group(0))
-            if m_title:
-                mm = _parse_magnitude_to_millions(m_title.group(1))
-                if mm is not None:
-                    return mm
-            # nếu không có title, lấy text trong <div class="metric-value-wrapper ..."> ... </div>
-            m_text = re.search(r'metric-value-wrapper[^>]*>([\-0-9\.,KMB]+)<', row.group(0))
-            if m_text:
-                mm = _parse_magnitude_to_millions(m_text.group(1))
-                if mm is not None:
-                    return mm
-
-    # 3) Thất bại
+        m = re.search(r'Netflow[^>]*\+?(-?\d+(?:\.\d+)?)\s*M', html)
+        if m:
+            try:
+                return float(m.group(1))
+            except:
+                pass
     return None
 
 def get_alt_btc_spot_volume_ratio():
@@ -235,21 +141,18 @@ def get_alt_btc_spot_volume_ratio():
     return alt_vol / btc_vol if btc_vol > 0 else None
 
 def get_altcoin_season_index():
-    # API chính
     try:
         data = _safe_get_json("https://api.blockchaincenter.net/api/altcoin-season")
         if data and "index" in data:
             return int(round(float(data["index"])))
     except:
         pass
-    # API backup
     try:
         data = _safe_get_json("https://api.blockchaincenter.net/api/altcoin-season-index")
         if data and isinstance(data, dict) and "index" in data:
             return int(round(float(data["index"])))
     except:
         pass
-    # Fallback scrape
     html = _safe_get_text("https://www.blockchaincenter.net/altcoin-season-index/")
     if html:
         m = re.search(r'font-size:88px;[^>]*>(\d{1,3})<', html)
@@ -268,7 +171,7 @@ def build_report():
     ethbtc_7d = get_eth_btc_change_7d_pct()
     defi_7d = get_defi_tvl_change_7d_pct()
     funding_avg = get_funding_rate_avg()
-    netflow_m = get_stablecoin_netflow_cex_usd()  # ĐÃ NÂNG CẤP
+    netflow_m = get_stablecoin_netflow_cex_usd()
     alt_btc_ratio = get_alt_btc_spot_volume_ratio()
     season_idx = get_altcoin_season_index()
 
@@ -288,6 +191,8 @@ def build_report():
         level = "Early Signal"
 
     lines = [f"📊 <b>Crypto Daily Report</b> — {now} (GMT+7)", ""]
+
+    # Luôn hiển thị đủ 9 mục
     lines.append(f"1️⃣ BTC Dominance: {btc_dom:.2f}% 🧊" if btc_dom is not None else "1️⃣ BTC Dominance: N/A 🧊")
     lines.append(f"2️⃣ Total Market Cap: {_fmt_usd(total_mc)} 💰" if total_mc is not None else "2️⃣ Total Market Cap: N/A 💰")
     lines.append(f"3️⃣ Altcoin Market Cap (est): {_fmt_usd(altcap)} 🔷" if altcap is not None else "3️⃣ Altcoin Market Cap (est): N/A 🔷")
