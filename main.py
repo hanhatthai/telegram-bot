@@ -14,6 +14,7 @@ import asyncio
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 CHAT_ID = os.getenv("CHAT_ID", "")
+CQ_COOKIE = os.getenv("CQ_COOKIE", "")  # Cookie CryptoQuant bạn sẽ đặt ở đây
 HCM_TZ = pytz.timezone("Asia/Ho_Chi_Minh")
 
 # ----------------- Helpers -----------------
@@ -76,7 +77,6 @@ def get_eth_btc_change_7d_pct():
         return None
 
 def _compute_7d_change_from_series(series):
-    """series: list of dict with date(int, seconds) and tvl(float)"""
     if not series or len(series) < 8:
         return None
     today_ts = int(dt.datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
@@ -90,7 +90,6 @@ def _compute_7d_change_from_series(series):
     return None
 
 def get_defi_tvl_change_7d_pct():
-    # API mới
     data = _safe_get_json("https://api.llama.fi/v2/historicalChainTvl")
     if isinstance(data, list):
         try:
@@ -99,8 +98,6 @@ def get_defi_tvl_change_7d_pct():
                 return pct
         except:
             pass
-
-    # Fallback scrape CSV
     html = _safe_get_text("https://defillama.com/")
     if html:
         m = re.search(r'href="([^"]+\.csv)"', html)
@@ -138,26 +135,31 @@ def get_funding_rate_avg():
 
 def get_stablecoin_netflow_cex_usd():
     """
-    Lấy Stablecoin Netflow (CEX) từ CryptoQuant API.
-    Trả về (giá trị hiện tại M USD, trung bình 7 ngày M USD).
+    Lấy dữ liệu từ CryptoQuant (Exchange Netflow Total) dùng cookie.
+    Trả về tuple: (netflow_cur, netflow_avg_7d) — đơn vị: triệu USD
     """
+    if not CQ_COOKIE:
+        return None, None
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Cookie": CQ_COOKIE
+    }
     url = "https://api.cryptoquant.com/live/v4/ms/61af138856f85872fa84fc3c/charts/preview"
+    js = _safe_get_json(url, headers=headers)
     try:
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
-        r.raise_for_status()
-        j = r.json()
-        last_value = j.get("lastValue")  # USD
-        data = j.get("data") or []
-        avg7d = None
-        if isinstance(data, list) and data:
-            vals = [v[1] for v in data[-7:] if isinstance(v, list) and len(v) >= 2 and isinstance(v[1], (int, float))]
-            if vals:
-                avg7d = sum(vals) / len(vals)
-        cur_m = round(last_value / 1_000_000.0, 2) if last_value is not None else None
-        avg_m = round(avg7d / 1_000_000.0, 2) if avg7d is not None else None
-        return cur_m, avg_m
-    except Exception as e:
-        print("Stablecoin Netflow fetch error:", e)
+        if not js or "data" not in js:
+            return None, None
+        # Lấy danh sách [datetime, netflow_total]
+        points = js["data"]
+        if not points:
+            return None, None
+        # Giá trị hiện tại
+        netflow_cur = float(points[-1][1]) / 1_000_000
+        # Trung bình 7 ngày (7 điểm cuối)
+        last_7 = points[-7:]
+        netflow_avg = sum(float(p[1]) for p in last_7) / len(last_7) / 1_000_000
+        return netflow_cur, netflow_avg
+    except:
         return None, None
 
 def get_alt_btc_spot_volume_ratio():
@@ -232,14 +234,17 @@ def build_report():
     lines.append(f"4️⃣ ETH/BTC 7d change: {ethbtc_7d:+.2f}% {'✅' if s_ethbtc else ''}" if ethbtc_7d is not None else "4️⃣ ETH/BTC 7d change: N/A")
     lines.append(f"5️⃣ DeFi TVL 7d change: {defi_7d:+.2f}% 🧭" if defi_7d is not None else "5️⃣ DeFi TVL 7d change: N/A 🧭")
     lines.append(f"6️⃣ Funding Rate avg: {funding_avg:+.6f} {'📈' if funding_avg >= 0 else '📉'}" if funding_avg is not None else "6️⃣ Funding Rate avg: N/A")
-    lines.append(f"7️⃣ Stablecoin Netflow (CEX): {f'{netflow_cur} M' if netflow_cur is not None else 'N/A'} (7d avg: {f'{netflow_avg} M' if netflow_avg is not None else 'N/A'})" if (netflow_cur is not None or netflow_avg is not None) else "7️⃣ Stablecoin Netflow (CEX): N/A")
+    if netflow_cur is not None and netflow_avg is not None:
+        lines.append(f"7️⃣ Stablecoin Netflow (CEX): {netflow_cur:+.2f} M (7d avg: {netflow_avg:.2f} M)")
+    else:
+        lines.append("7️⃣ Stablecoin Netflow (CEX): N/A")
     lines.append(f"8️⃣ Alt/BTC Volume Ratio: {alt_btc_ratio:.2f} {'✅' if s_ratio else ''}" if alt_btc_ratio is not None else "8️⃣ Alt/BTC Volume Ratio: N/A")
     lines.append(f"9️⃣ Altcoin Season Index (BC): {season_idx} {'🟢' if s_index else ''}" if season_idx is not None else "9️⃣ Altcoin Season Index (BC): N/A")
 
     lines += ["", "— <b>Tín hiệu kích hoạt</b>:"]
     lines.append(f"{'✅' if s_ethbtc else '❌'} ETH/BTC > +3% (7d)")
     lines.append(f"{'✅' if s_funding else '❌'} Funding Rate dương")
-    lines.append(f"{'✅' if s_netflow else '❌'} Stablecoin Netflow > 0")
+    lines.append(f"{'✅' if s_netflow else '❌'} Stablecoin Netflow (7d avg) > 0")
     lines.append(f"{'✅' if s_ratio else '❌'} Alt/BTC Volume Ratio > 1.5")
     lines.append(f"{'✅' if s_index else '❌'} Altcoin Season Index > 75")
 
