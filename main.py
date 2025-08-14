@@ -62,153 +62,227 @@ def get_altcoin_market_cap_est():
     try:
         total = float(data["data"]["total_market_cap"]["usd"])
         btc_pct = float(data["data"]["market_cap_percentage"]["btc"])
-        return total * (1 - btc_pct / 100)
+        return max(total - total * btc_pct / 100, 0.0)
     except:
         return None
 
-def get_eth_btc_change_7d():
-    data = _safe_get_json(
-        "https://api.coingecko.com/api/v3/coins/ethereum/market_chart?vs_currency=btc&days=7&interval=daily"
-    )
+def get_eth_btc_change_7d_pct():
+    url = "https://api.coingecko.com/api/v3/coins/markets"
+    params = {"vs_currency": "btc", "ids": "ethereum", "price_change_percentage": "7d"}
+    data = _safe_get_json(url, params=params)
     try:
-        prices = [p[1] for p in data["prices"]]
-        return ((prices[-1] - prices[0]) / prices[0]) * 100
+        return float(data[0]["price_change_percentage_7d_in_currency"])
     except:
         return None
 
-def get_defi_tvl_change_7d():
-    data = _safe_get_json("https://api.llama.fi/charts")
-    try:
-        tvl = [p["totalLiquidityUSD"] for p in data]
-        return ((tvl[-1] - tvl[-8]) / tvl[-8]) * 100
-    except:
+def _compute_7d_change_from_series(series):
+    """series: list of dict with date(int, seconds) and tvl(float)"""
+    if not series or len(series) < 8:
         return None
+    today_ts = int(dt.datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+    filtered = [p for p in series if p["date"] <= today_ts]
+    if len(filtered) < 8:
+        return None
+    last_val = float(filtered[-1]["tvl"])
+    prev_val = float(filtered[-8]["tvl"])
+    if prev_val != 0:
+        return (last_val - prev_val) / prev_val * 100
+    return None
+
+def get_defi_tvl_change_7d_pct():
+    # API mới
+    data = _safe_get_json("https://api.llama.fi/v2/historicalChainTvl")
+    if isinstance(data, list):
+        try:
+            pct = _compute_7d_change_from_series(data)
+            if isinstance(pct, (int, float)):
+                return pct
+        except:
+            pass
+
+    # Fallback scrape CSV
+    html = _safe_get_text("https://defillama.com/")
+    if html:
+        m = re.search(r'href="([^"]+\.csv)"', html)
+        if m:
+            csv_url = m.group(1)
+            if csv_url.startswith("/"):
+                csv_url = "https://defillama.com" + csv_url
+            csv_text = _safe_get_text(csv_url)
+            if csv_text:
+                rows = [row.strip() for row in csv_text.splitlines() if row.strip()]
+                if rows and ("tvl" in rows[0].lower() or "date" in rows[0].lower()):
+                    rows = rows[1:]
+                series = []
+                for row in rows:
+                    parts = row.split(",")
+                    if len(parts) >= 2:
+                        try:
+                            ts = int(dt.datetime.fromisoformat(parts[0].replace("Z","")).timestamp())
+                            tvl = float(parts[1])
+                            series.append({"date": ts, "tvl": tvl})
+                        except:
+                            continue
+                series.sort(key=lambda x: x["date"])
+                return _compute_7d_change_from_series(series)
+    return None
 
 def get_funding_rate_avg():
-    data = _safe_get_json("https://api.coinglass.com/api/pro/v1/futures/funding_rates?symbol=ALL")
+    url = "https://fapi.binance.com/fapi/v1/premiumIndex"
+    data = _safe_get_json(url)
     try:
-        rates = [float(x["fundingRate"]) for x in data["data"]]
-        return sum(rates) / len(rates)
+        rates = [float(x["lastFundingRate"]) for x in data if x.get("lastFundingRate") is not None]
+        return sum(rates) / len(rates) if rates else None
     except:
         return None
 
 def get_stablecoin_netflow_cex_usd():
     """
-    Lấy dữ liệu Stablecoin Netflow (CEX) từ CryptoQuant (All Stablecoins ERC20).
-    Trả về tuple (current_value_million_usd, avg7d_million_usd).
+    Lấy Stablecoin Netflow (CEX) từ CryptoQuant API.
+    Trả về (giá trị hiện tại M USD, trung bình 7 ngày M USD).
     """
     url = "https://api.cryptoquant.com/live/v4/ms/61af138856f85872fa84fc3c/charts/preview"
     try:
         r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
         r.raise_for_status()
         j = r.json()
-        last_value = j.get("lastValue")
+        last_value = j.get("lastValue")  # USD
         data = j.get("data") or []
         avg7d = None
-        if data and isinstance(data, list):
-            values = [v[1] for v in data[-7:] if isinstance(v, list) and len(v) >= 2 and isinstance(v[1], (int, float))]
-            if values:
-                avg7d = sum(values) / len(values)
-        cur_m = round(float(last_value) / 1_000_000.0, 2) if last_value is not None else None
-        avg_m = round(float(avg7d) / 1_000_000.0, 2) if avg7d is not None else None
+        if isinstance(data, list) and data:
+            vals = [v[1] for v in data[-7:] if isinstance(v, list) and len(v) >= 2 and isinstance(v[1], (int, float))]
+            if vals:
+                avg7d = sum(vals) / len(vals)
+        cur_m = round(last_value / 1_000_000.0, 2) if last_value is not None else None
+        avg_m = round(avg7d / 1_000_000.0, 2) if avg7d is not None else None
         return cur_m, avg_m
     except Exception as e:
         print("Stablecoin Netflow fetch error:", e)
         return None, None
 
-def get_alt_btc_volume_ratio():
-    data = _safe_get_json("https://api.coingecko.com/api/v3/global")
-    try:
-        btc_vol = float(data["data"]["total_volume"]["btc"])
-        alt_vol = float(data["data"]["total_volume"]["usd"]) - btc_vol
-        return alt_vol / btc_vol
-    except:
-        return None
+def get_alt_btc_spot_volume_ratio():
+    base_url = "https://api.coingecko.com/api/v3/coins/markets"
+    btc_vol, alt_vol = 0, 0
+    for p in range(1, 4):
+        data = _safe_get_json(base_url, params={"vs_currency": "usd", "order": "market_cap_desc", "per_page": 250, "page": p})
+        if not data:
+            break
+        for coin in data:
+            vol = float(coin.get("total_volume") or 0)
+            if coin.get("id") == "bitcoin":
+                btc_vol += vol
+            else:
+                alt_vol += vol
+    return alt_vol / btc_vol if btc_vol > 0 else None
 
-def get_altseason_index():
-    data = _safe_get_json("https://www.blockchaincenter.net/api/altseason/current/")
+def get_altcoin_season_index():
     try:
-        return float(data["altcoinSeasonIndex"])
+        data = _safe_get_json("https://api.blockchaincenter.net/api/altcoin-season")
+        if data and "index" in data:
+            return int(round(float(data["index"])))
     except:
-        return None
+        pass
+    try:
+        data = _safe_get_json("https://api.blockchaincenter.net/api/altcoin-season-index")
+        if data and isinstance(data, dict) and "index" in data:
+            return int(round(float(data["index"])))
+    except:
+        pass
+    html = _safe_get_text("https://www.blockchaincenter.net/altcoin-season-index/")
+    if html:
+        m = re.search(r'font-size:88px;[^>]*>(\d{1,3})<', html)
+        if m:
+            val = int(m.group(1))
+            if 0 <= val <= 100:
+                return val
+    return None
 
 # ----------------- Report -----------------
 def build_report():
-    now = dt.datetime.now(HCM_TZ)
-    report = f"📊 Crypto Daily Report — {now.strftime('%Y-%m-%d %H:%M')} (GMT+7)\n\n"
-
+    now = dt.datetime.now(HCM_TZ).strftime("%Y-%m-%d %H:%M")
     btc_dom = get_btc_dominance()
     total_mc = get_total_market_cap_usd()
-    alt_mc = get_altcoin_market_cap_est()
-    eth_btc_7d = get_eth_btc_change_7d()
-    defi_tvl_7d = get_defi_tvl_change_7d()
+    altcap = get_altcoin_market_cap_est()
+    ethbtc_7d = get_eth_btc_change_7d_pct()
+    defi_7d = get_defi_tvl_change_7d_pct()
     funding_avg = get_funding_rate_avg()
     netflow_cur, netflow_avg = get_stablecoin_netflow_cex_usd()
-    alt_btc_ratio = get_alt_btc_volume_ratio()
-    altseason_idx = get_altseason_index()
+    alt_btc_ratio = get_alt_btc_spot_volume_ratio()
+    season_idx = get_altcoin_season_index()
 
-    report += f"1️⃣ BTC Dominance: {btc_dom:.2f}% 🧊\n" if btc_dom is not None else "1️⃣ BTC Dominance: N/A\n"
-    report += f"2️⃣ Total Market Cap: {_fmt_usd(total_mc)} 💰\n"
-    report += f"3️⃣ Altcoin Market Cap (est): {_fmt_usd(alt_mc)} 🔷\n"
-    report += f"4️⃣ ETH/BTC 7d change: {eth_btc_7d:+.2f}% {'✅' if eth_btc_7d and eth_btc_7d > 3 else '🧊'}\n"
-    report += f"5️⃣ DeFi TVL 7d change: {defi_tvl_7d:+.2f}% 🧭\n" if defi_tvl_7d is not None else "5️⃣ DeFi TVL 7d change: N/A\n"
-    report += f"6️⃣ Funding Rate avg: {funding_avg:+.6f} {'📈' if funding_avg and funding_avg > 0 else '📉'}\n" if funding_avg is not None else "6️⃣ Funding Rate avg: N/A\n"
-    report += f"7️⃣ Stablecoin Netflow (CEX): {netflow_cur if netflow_cur is not None else 'N/A'} M (7d avg: {netflow_avg if netflow_avg is not None else 'N/A'} M)\n"
-    report += f"8️⃣ Alt/BTC Volume Ratio: {alt_btc_ratio:.2f} {'✅' if alt_btc_ratio and alt_btc_ratio > 1.5 else '🧊'}\n" if alt_btc_ratio is not None else "8️⃣ Alt/BTC Volume Ratio: N/A\n"
-    report += f"9️⃣ Altcoin Season Index (BC): {altseason_idx:.0f} \n" if altseason_idx is not None else "9️⃣ Altcoin Season Index: N/A\n"
+    s_ethbtc = ethbtc_7d and ethbtc_7d > 3
+    s_funding = funding_avg and funding_avg > 0
+    s_netflow = netflow_avg and netflow_avg > 0
+    s_ratio = alt_btc_ratio and alt_btc_ratio > 1.5
+    s_index = season_idx and season_idx > 75
+    count_active = sum([bool(x) for x in [s_ethbtc, s_funding, s_netflow, s_ratio, s_index]])
 
-    report += "\n— Tín hiệu kích hoạt:\n"
-    report += f"{'✅' if eth_btc_7d and eth_btc_7d > 3 else '❌'} ETH/BTC > +3% (7d)\n"
-    report += f"{'✅' if funding_avg and funding_avg > 0 else '❌'} Funding Rate dương\n"
-    report += f"{'✅' if netflow_avg and netflow_avg > 0 else '❌'} Stablecoin Netflow 7d avg > 0\n"
-    report += f"{'✅' if alt_btc_ratio and alt_btc_ratio > 1.5 else '❌'} Alt/BTC Volume Ratio > 1.5\n"
-    report += f"{'✅' if altseason_idx and altseason_idx > 75 else '❌'} Altcoin Season Index > 75\n"
+    level = None
+    if count_active >= 4 and s_index:
+        level = "Altseason Confirmed"
+    elif count_active >= 4:
+        level = "Strong Signal"
+    elif 2 <= count_active <= 3:
+        level = "Early Signal"
 
-    report += "\n— Cảnh báo Altseason:\n"
-    if (eth_btc_7d and eth_btc_7d > 3) and (funding_avg and funding_avg > 0) and (netflow_avg and netflow_avg > 0) and (alt_btc_ratio and alt_btc_ratio > 1.5):
-        if altseason_idx and altseason_idx > 75:
-            report += "🚀 Full Signal — Altseason rõ ràng!\n"
-        else:
-            report += "🔥 Early Signal — đang hình thành, cần theo dõi\n"
-    else:
-        report += "🧊 Chưa đủ điều kiện\n"
+    lines = [f"📊 <b>Crypto Daily Report</b> — {now} (GMT+7)", ""]
+    lines.append(f"1️⃣ BTC Dominance: {btc_dom:.2f}% 🧊" if btc_dom is not None else "1️⃣ BTC Dominance: N/A 🧊")
+    lines.append(f"2️⃣ Total Market Cap: {_fmt_usd(total_mc)} 💰" if total_mc is not None else "2️⃣ Total Market Cap: N/A 💰")
+    lines.append(f"3️⃣ Altcoin Market Cap (est): {_fmt_usd(altcap)} 🔷" if altcap is not None else "3️⃣ Altcoin Market Cap (est): N/A 🔷")
+    lines.append(f"4️⃣ ETH/BTC 7d change: {ethbtc_7d:+.2f}% {'✅' if s_ethbtc else ''}" if ethbtc_7d is not None else "4️⃣ ETH/BTC 7d change: N/A")
+    lines.append(f"5️⃣ DeFi TVL 7d change: {defi_7d:+.2f}% 🧭" if defi_7d is not None else "5️⃣ DeFi TVL 7d change: N/A 🧭")
+    lines.append(f"6️⃣ Funding Rate avg: {funding_avg:+.6f} {'📈' if funding_avg >= 0 else '📉'}" if funding_avg is not None else "6️⃣ Funding Rate avg: N/A")
+    lines.append(f"7️⃣ Stablecoin Netflow (CEX): {f'{netflow_cur} M' if netflow_cur is not None else 'N/A'} (7d avg: {f'{netflow_avg} M' if netflow_avg is not None else 'N/A'})" if (netflow_cur is not None or netflow_avg is not None) else "7️⃣ Stablecoin Netflow (CEX): N/A")
+    lines.append(f"8️⃣ Alt/BTC Volume Ratio: {alt_btc_ratio:.2f} {'✅' if s_ratio else ''}" if alt_btc_ratio is not None else "8️⃣ Alt/BTC Volume Ratio: N/A")
+    lines.append(f"9️⃣ Altcoin Season Index (BC): {season_idx} {'🟢' if s_index else ''}" if season_idx is not None else "9️⃣ Altcoin Season Index (BC): N/A")
 
-    report += "\n— Ghi chú:\n"
-    report += "• Stablecoin netflow dương ⇒ dòng tiền sắp giải ngân.\n"
-    report += "• Alt/BTC volume ratio > 1.5 ⇒ altcoin volume vượt BTC.\n"
-    report += "• Altseason Index > 75 ⇒ xu hướng altseason rõ ràng.\n"
-    report += "Code by: HNT"
+    lines += ["", "— <b>Tín hiệu kích hoạt</b>:"]
+    lines.append(f"{'✅' if s_ethbtc else '❌'} ETH/BTC > +3% (7d)")
+    lines.append(f"{'✅' if s_funding else '❌'} Funding Rate dương")
+    lines.append(f"{'✅' if s_netflow else '❌'} Stablecoin Netflow > 0")
+    lines.append(f"{'✅' if s_ratio else '❌'} Alt/BTC Volume Ratio > 1.5")
+    lines.append(f"{'✅' if s_index else '❌'} Altcoin Season Index > 75")
 
-    return report
+    if level:
+        lines += ["", "— <b>Cảnh báo Altseason</b>:"]
+        if level == "Altseason Confirmed":
+            lines.append("🔥 <b>Altseason Confirmed</b> — khả năng trong ~1–2 tuần")
+        elif level == "Strong Signal":
+            lines.append("🔥 <b>Strong Signal</b> — nhiều điều kiện đã kích hoạt")
+        elif level == "Early Signal":
+            lines.append("🔥 <b>Early Signal</b> — đang hình thành, cần theo dõi")
 
-# ----------------- Telegram Bot -----------------
-async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    report = build_report()
-    await context.bot.send_message(chat_id=CHAT_ID, text=report, parse_mode=ParseMode.MARKDOWN)
+    lines += ["", "— <i>Ghi chú</i>:", "• Stablecoin netflow dương ⇒ dòng tiền sắp giải ngân.",
+              "• Alt/BTC volume ratio > 1.5 ⇒ altcoin volume vượt BTC.",
+              "• Altseason Index > 75 ⇒ xu hướng altseason rõ ràng.",
+              "<i>Code by: HNT</i>"]
+    return "\n".join(lines)
 
-async def daily_task():
-    while True:
-        now = dt.datetime.now(HCM_TZ)
-        if now.hour == 11 and now.minute == 45:
-            report = build_report()
-            app = ApplicationBuilder().token(BOT_TOKEN).build()
-            await app.bot.send_message(chat_id=CHAT_ID, text=report, parse_mode=ParseMode.MARKDOWN)
-            await asyncio.sleep(60)
-        await asyncio.sleep(20)
+# ----------------- Telegram -----------------
+async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(build_report(), parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
-def run_bot():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("report", send_report))
-    threading.Thread(target=lambda: asyncio.run(daily_task()), daemon=True).start()
-    app.run_polling()
+async def send_daily(context: ContextTypes.DEFAULT_TYPE):
+    await context.bot.send_message(chat_id=CHAT_ID, text=build_report(), parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
-# ----------------- Flask Keep-alive -----------------
-app_flask = Flask(__name__)
+# ----------------- Flask + Thread -----------------
+app = Flask(__name__)
 
-@app_flask.route("/")
+@app.route('/')
 def home():
-    return "Bot is running!"
+    return "Bot is running"
+
+def start_bot():
+    if not BOT_TOKEN:
+        raise SystemExit("Missing BOT_TOKEN env.")
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    tg_app = ApplicationBuilder().token(BOT_TOKEN).build()
+    tg_app.add_handler(CommandHandler("check", check))
+    tg_app.job_queue.run_daily(send_daily, time=dt.time(hour=7, tzinfo=HCM_TZ))
+    tg_app.run_polling(stop_signals=None)
+
+threading.Thread(target=start_bot, daemon=True).start()
 
 if __name__ == "__main__":
-    threading.Thread(target=lambda: app_flask.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000))), daemon=True).start()
-    run_bot()
+    app.run(host="0.0.0.0", port=8080)
