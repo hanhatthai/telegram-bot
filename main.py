@@ -29,7 +29,8 @@ def _safe_get_json(url: str, **kwargs):
         r = requests.get(url, timeout=25, headers=headers, **kwargs)
         r.raise_for_status()
         return r.json()
-    except:
+    except Exception as e:
+        print(f"DEBUG _safe_get_json error for {url}: {e}")
         return None
 
 def _safe_get_text(url: str, **kwargs):
@@ -76,7 +77,6 @@ def get_eth_btc_change_7d_pct():
         return None
 
 def _compute_7d_change_from_series(series):
-    """series: list of dict with date(int, seconds) and tvl(float)"""
     if not series or len(series) < 8:
         return None
     today_ts = int(dt.datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
@@ -90,7 +90,6 @@ def _compute_7d_change_from_series(series):
     return None
 
 def get_defi_tvl_change_7d_pct():
-    # API mới
     data = _safe_get_json("https://api.llama.fi/v2/historicalChainTvl")
     if isinstance(data, list):
         try:
@@ -100,7 +99,6 @@ def get_defi_tvl_change_7d_pct():
         except:
             pass
 
-    # Fallback scrape CSV
     html = _safe_get_text("https://defillama.com/")
     if html:
         m = re.search(r'href="([^"]+\.csv)"', html)
@@ -136,20 +134,29 @@ def get_funding_rate_avg():
     except:
         return None
 
-# --- SỬA: Lấy 167 giờ cuối + lastValue để đủ 168 giờ ---
+# --- Debug Stablecoin Netflow ---
 def get_stablecoin_netflow_cex_usd():
     url = "https://api.cryptoquant.com/live/v4/ms/61af138856f85872fa84fc3c/charts/preview"
-    data = _safe_get_json(url)
-    if not data or "result" not in data or "data" not in data["result"]:
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json, text/plain, */*"
+    }
+    data = _safe_get_json(url, headers=headers)
+    if not data:
+        print("DEBUG: No data from CryptoQuant")
         return None, None
     try:
-        last_val = float(data["result"]["data"]["lastValue"]) / 1_000_000  # M USD mới nhất
-        points = data["result"]["data"].get("data", [])  # [timestamp, value]
+        last_val = float(data["result"]["data"]["lastValue"]) / 1_000_000
+        points = data["result"]["data"].get("data", [])
+        if not points:
+            print("DEBUG: No points in data")
+            return last_val, None
         last_167 = [float(p[1]) / 1_000_000 for p in points[-167:] if len(p) >= 2]
         all_168 = last_167 + [last_val]
         avg7d = sum(all_168) / len(all_168) if all_168 else None
         return last_val, avg7d
-    except:
+    except Exception as e:
+        print("DEBUG Exception in parsing CryptoQuant:", e)
         return None, None
 
 def get_alt_btc_spot_volume_ratio():
