@@ -14,7 +14,7 @@ import asyncio
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 CHAT_ID = os.getenv("CHAT_ID", "")
-CQ_COOKIE = os.getenv("CQ_COOKIE", "")
+CQ_COOKIE = os.getenv("CQ_COOKIE", "")  # Cookie CryptoQuant
 HCM_TZ = pytz.timezone("Asia/Ho_Chi_Minh")
 
 # ----------------- Helpers -----------------
@@ -98,7 +98,6 @@ def get_defi_tvl_change_7d_pct():
                 return pct
         except:
             pass
-
     html = _safe_get_text("https://defillama.com/")
     if html:
         m = re.search(r'href="([^"]+\.csv)"', html)
@@ -134,24 +133,26 @@ def get_funding_rate_avg():
     except:
         return None
 
-# --- New: Get Stablecoin Netflow from CryptoQuant ---
+# ✅ Đã sửa: Lấy Stablecoin Netflow từ API CryptoQuant
 def get_stablecoin_netflow_cex_usd():
     if not CQ_COOKIE:
         return None
-    url = "https://api.cryptoquant.com/live/v4/ms/61af138856f85872fa84fc3c/charts/preview"
     headers = {
         "User-Agent": "Mozilla/5.0",
-        "Accept": "application/json, text/plain, */*",
         "Cookie": CQ_COOKIE
     }
-    data = _safe_get_json(url, headers=headers)
-    if not data or "data" not in data:
-        return None
+    url = "https://api.cryptoquant.com/live/v4/ms/61af138856f85872fa84fc3c/charts/preview"
     try:
-        last_val = float(data["data"][-1][1]) / 1_000_000
-        return last_val
+        js = _safe_get_json(url, headers=headers)
+        if js and "result" in js and "data" in js["result"]:
+            data_list = js["result"]["data"]
+            if data_list:
+                latest = data_list[-1]
+                if "netflow" in latest:
+                    return float(latest["netflow"]) / 1_000_000
     except:
-        return None
+        pass
+    return None
 
 def get_alt_btc_spot_volume_ratio():
     base_url = "https://api.coingecko.com/api/v3/coins/markets"
