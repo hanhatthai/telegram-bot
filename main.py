@@ -1,10 +1,10 @@
 import os
 import re
 import math
-import json
 import datetime as dt
 import pytz
 import requests
+import json
 from typing import Optional
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
@@ -135,63 +135,28 @@ def get_funding_rate_avg():
     except:
         return None
 
-# --- Stablecoin Netflow (CryptoQuant, bypass bằng CQ_HEADERS) ---
+# --- Stablecoin Netflow (CEX) ---
 def get_stablecoin_netflow_cex_usd():
-    """
-    Lấy trực tiếp Exchange Netflow (Total) từ CryptoQuant public endpoint.
-    - Dùng headers thật từ trình duyệt (đọc từ biến môi trường CQ_HEADERS, dạng JSON string).
-    - Tính giá trị hiện tại (M USD) và trung bình 7 ngày gần nhất (168 giờ = 167 điểm + lastValue).
-    - Trả về (current_M, avg7d_M).
-    """
     url = "https://api.cryptoquant.com/live/v4/ms/61af138856f85872fa84fc3c/charts/preview"
+    try:
+        cq_headers = json.loads(os.getenv("CQ_HEADERS", "{}"))
+    except:
+        cq_headers = {}
 
-    # 1) Lấy headers từ ENV (JSON string)
-    headers_env = os.getenv("CQ_HEADERS", "")
-    headers = {}
-    if headers_env:
-        try:
-            headers = json.loads(headers_env)
-        except Exception as e:
-            print("DEBUG: Lỗi parse CQ_HEADERS:", e)
-            headers = {}
-
-    # Fallback tối thiểu để tránh None
-    if not headers:
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "application/json, text/plain, */*",
-        }
-
-    data = _safe_get_json(url, headers=headers)
+    data = _safe_get_json(url, headers=cq_headers)
     if not data:
         print("DEBUG: No data from CryptoQuant")
         return None, None
-
-    # 2) Hỗ trợ cả 2 cấu trúc JSON (có/không có result.data)
     try:
-        payload = data.get("result", {}).get("data", data)
-        last_val_raw = payload.get("lastValue")
-        series = payload.get("data", [])
-
-        if last_val_raw is None:
-            raise KeyError("lastValue not found in CryptoQuant payload")
-
-        # đổi sang đơn vị "M" (triệu USD)
-        last_val_m = float(last_val_raw) / 1_000_000.0
-
-        # 3) Lấy 167 điểm cuối + lastValue = 168 giờ ~ 7 ngày
-        last_167_m = []
-        if isinstance(series, list) and series:
-            # mỗi phần tử: [timestamp_ms, value]
-            last_167_m = [
-                float(pt[1]) / 1_000_000.0
-                for pt in series[-167:]
-                if isinstance(pt, (list, tuple)) and len(pt) >= 2
-            ]
-        all_168_m = last_167_m + [last_val_m]
-        avg7d_m = sum(all_168_m) / len(all_168_m) if all_168_m else None
-
-        return last_val_m, avg7d_m
+        last_val = float(data["result"]["data"]["lastValue"]) / 1_000_000
+        points = data["result"]["data"].get("data", [])
+        if not points:
+            print("DEBUG: No points in data")
+            return last_val, None
+        last_167 = [float(p[1]) / 1_000_000 for p in points[-167:] if len(p) >= 2]
+        all_168 = last_167 + [last_val]
+        avg7d = sum(all_168) / len(all_168) if all_168 else None
+        return last_val, avg7d
     except Exception as e:
         print("DEBUG Exception in parsing CryptoQuant:", e)
         return None, None
