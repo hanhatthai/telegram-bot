@@ -87,10 +87,6 @@ def get_eth_btc_change_7d_pct():
         return None
 
 def get_defi_tvl_change_7d_pct():
-    """
-    Lấy tổng TVL time-series từ DefiLlama rồi tự tính % thay đổi 7 ngày.
-    Ổn định hơn so với đọc từng protocol.
-    """
     url = "https://api.llama.fi/overview/total?excludeTotalDataChart=false&excludeTotalChart=true"
     data = _safe_get_json(url)
     try:
@@ -130,10 +126,15 @@ def get_funding_rate_avg():
         return None
 
 def get_stablecoin_netflow_cex_usd():
-    """
-    Ưu tiên CryptoQuant API (cần CRYPTOQUANT_API_KEY).
-    Nếu không có key, nhiều khi server bị chặn khi scrape => có thể trả None.
-    """
+    # 1. WhalePortal API (public)
+    try:
+        js = _safe_get_json("https://whaleportal.com/api/stablecoin-netflows")
+        if js and "netflow" in js:
+            return float(js["netflow"]) / 1_000_000  # đổi sang triệu USD
+    except:
+        pass
+
+    # 2. CryptoQuant API (nếu có key)
     if CRYPTOQUANT_API_KEY:
         try:
             url = "https://api.cryptoquant.com/v1/stablecoin/exchange-flows/netflow"
@@ -145,7 +146,7 @@ def get_stablecoin_netflow_cex_usd():
         except:
             pass
 
-    # Fallback (có thể bị chặn tuỳ IP)
+    # 3. Fallback scrape CryptoQuant (có thể bị chặn trên cloud)
     try:
         html = _safe_get_text(
             "https://cryptoquant.com/asset/stablecoin/chart/exchange-flows/netflow/all_exchange",
@@ -178,7 +179,6 @@ def get_alt_btc_spot_volume_ratio():
     return alt_vol / btc_vol if btc_vol > 0 else None
 
 def get_altcoin_season_index():
-    # Thử API JSON
     data = _safe_get_json("https://api.blockchaincenter.net/api/altcoin-season-index")
     try:
         if data:
@@ -187,7 +187,6 @@ def get_altcoin_season_index():
                     return int(round(float(data[key])))
     except:
         pass
-    # Fallback HTML
     try:
         html = _safe_get_text("https://www.blockchaincenter.net/altcoin-season-index/")
         if not html:
