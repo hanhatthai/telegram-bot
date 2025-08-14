@@ -75,26 +75,56 @@ def get_eth_btc_change_7d_pct():
     except:
         return None
 
+def _compute_7d_change_from_series(series):
+    """series: list of dict with date(int, seconds) and tvl(float)"""
+    if not series or len(series) < 8:
+        return None
+    today_ts = int(dt.datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+    filtered = [p for p in series if p["date"] <= today_ts]
+    if len(filtered) < 8:
+        return None
+    last_val = float(filtered[-1]["tvl"])
+    prev_val = float(filtered[-8]["tvl"])
+    if prev_val != 0:
+        return (last_val - prev_val) / prev_val * 100
+    return None
+
 def get_defi_tvl_change_7d_pct():
-    data = _safe_get_json("https://api.llama.fi/charts/defi")
-    try:
-        if data and len(data) >= 8:
-            last_val = data[-1][1]
-            prev_val = data[-8][1]
-            if prev_val:
-                return (last_val - prev_val) / prev_val * 100
-    except:
-        pass
-    data2 = _safe_get_json("https://api.llama.fi/overview/total?excludeTotalChart=false")
-    try:
-        chart = data2.get("totalDataChart", [])
-        if len(chart) >= 8:
-            last_val = chart[-1][1]
-            prev_val = chart[-8][1]
-            if prev_val:
-                return (last_val - prev_val) / prev_val * 100
-    except:
-        pass
+    # API mới
+    data = _safe_get_json("https://api.llama.fi/v2/historicalChainTvl")
+    if isinstance(data, list):
+        try:
+            pct = _compute_7d_change_from_series(data)
+            if isinstance(pct, (int, float)):
+                return pct
+        except:
+            pass
+
+    # Fallback scrape CSV
+    html = _safe_get_text("https://defillama.com/")
+    if html:
+        m = re.search(r'href="([^"]+\.csv)"', html)
+        if m:
+            csv_url = m.group(1)
+            if csv_url.startswith("/"):
+                csv_url = "https://defillama.com" + csv_url
+            csv_text = _safe_get_text(csv_url)
+            if csv_text:
+                rows = [row.strip() for row in csv_text.splitlines() if row.strip()]
+                if rows and ("tvl" in rows[0].lower() or "date" in rows[0].lower()):
+                    rows = rows[1:]
+                series = []
+                for row in rows:
+                    parts = row.split(",")
+                    if len(parts) >= 2:
+                        try:
+                            ts = int(dt.datetime.fromisoformat(parts[0].replace("Z","")).timestamp())
+                            tvl = float(parts[1])
+                            series.append({"date": ts, "tvl": tvl})
+                        except:
+                            continue
+                series.sort(key=lambda x: x["date"])
+                return _compute_7d_change_from_series(series)
     return None
 
 def get_funding_rate_avg():
@@ -191,8 +221,6 @@ def build_report():
         level = "Early Signal"
 
     lines = [f"📊 <b>Crypto Daily Report</b> — {now} (GMT+7)", ""]
-
-    # Luôn hiển thị đủ 9 mục
     lines.append(f"1️⃣ BTC Dominance: {btc_dom:.2f}% 🧊" if btc_dom is not None else "1️⃣ BTC Dominance: N/A 🧊")
     lines.append(f"2️⃣ Total Market Cap: {_fmt_usd(total_mc)} 💰" if total_mc is not None else "2️⃣ Total Market Cap: N/A 💰")
     lines.append(f"3️⃣ Altcoin Market Cap (est): {_fmt_usd(altcap)} 🔷" if altcap is not None else "3️⃣ Altcoin Market Cap (est): N/A 🔷")
