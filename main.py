@@ -226,16 +226,7 @@ def build_report():
     elif 2 <= count_active <= 3:
         level = "Early Signal"
 
-    # Ước tính số ngày
-    estimate_days = "N/A"
-    if count_active >= 4 and s_index:
-        estimate_days = "3–5 ngày (Độ tin cậy: 85%)"
-    elif count_active >= 4:
-        estimate_days = "5–7 ngày (Độ tin cậy: 75%)"
-    elif count_active >= 2:
-        estimate_days = "7–10 ngày (Độ tin cậy: 60%)"
-
-    # Format báo cáo
+   # Format báo cáo
     lines = [f"📊 <b>Crypto Daily Report</b> — {now} (GMT+7)", ""]
 
     def fmt_change(short, long, desc):
