@@ -4,7 +4,6 @@ import math
 import datetime as dt
 import pytz
 import requests
-import json
 from typing import Optional
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
@@ -15,6 +14,7 @@ import asyncio
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 CHAT_ID = os.getenv("CHAT_ID", "")
+CQ_COOKIE = os.getenv("CQ_COOKIE", "")  # Cookie CryptoQuant
 HCM_TZ = pytz.timezone("Asia/Ho_Chi_Minh")
 
 # ----------------- Helpers -----------------
@@ -30,8 +30,7 @@ def _safe_get_json(url: str, **kwargs):
         r = requests.get(url, timeout=25, headers=headers, **kwargs)
         r.raise_for_status()
         return r.json()
-    except Exception as e:
-        print(f"DEBUG _safe_get_json error for {url}: {e}")
+    except:
         return None
 
 def _safe_get_text(url: str, **kwargs):
@@ -99,7 +98,6 @@ def get_defi_tvl_change_7d_pct():
                 return pct
         except:
             pass
-
     html = _safe_get_text("https://defillama.com/")
     if html:
         m = re.search(r'href="([^"]+\.csv)"', html)
@@ -135,31 +133,26 @@ def get_funding_rate_avg():
     except:
         return None
 
-# --- Stablecoin Netflow (CEX) ---
+# ✅ Đã sửa: Lấy Stablecoin Netflow từ API CryptoQuant
 def get_stablecoin_netflow_cex_usd():
+    if not CQ_COOKIE:
+        return None
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Cookie": CQ_COOKIE
+    }
     url = "https://api.cryptoquant.com/live/v4/ms/61af138856f85872fa84fc3c/charts/preview"
     try:
-        cq_headers = json.loads(os.getenv("CQ_HEADERS", "{}"))
+        js = _safe_get_json(url, headers=headers)
+        if js and "result" in js and "data" in js["result"]:
+            data_list = js["result"]["data"]
+            if data_list:
+                latest = data_list[-1]
+                if "netflow" in latest:
+                    return float(latest["netflow"]) / 1_000_000
     except:
-        cq_headers = {}
-
-    data = _safe_get_json(url, headers=cq_headers)
-    if not data:
-        print("DEBUG: No data from CryptoQuant")
-        return None, None
-    try:
-        last_val = float(data["result"]["data"]["lastValue"]) / 1_000_000
-        points = data["result"]["data"].get("data", [])
-        if not points:
-            print("DEBUG: No points in data")
-            return last_val, None
-        last_167 = [float(p[1]) / 1_000_000 for p in points[-167:] if len(p) >= 2]
-        all_168 = last_167 + [last_val]
-        avg7d = sum(all_168) / len(all_168) if all_168 else None
-        return last_val, avg7d
-    except Exception as e:
-        print("DEBUG Exception in parsing CryptoQuant:", e)
-        return None, None
+        pass
+    return None
 
 def get_alt_btc_spot_volume_ratio():
     base_url = "https://api.coingecko.com/api/v3/coins/markets"
@@ -207,13 +200,13 @@ def build_report():
     ethbtc_7d = get_eth_btc_change_7d_pct()
     defi_7d = get_defi_tvl_change_7d_pct()
     funding_avg = get_funding_rate_avg()
-    netflow_m, netflow_avg7d = get_stablecoin_netflow_cex_usd()
+    netflow_m = get_stablecoin_netflow_cex_usd()
     alt_btc_ratio = get_alt_btc_spot_volume_ratio()
     season_idx = get_altcoin_season_index()
 
     s_ethbtc = ethbtc_7d and ethbtc_7d > 3
     s_funding = funding_avg and funding_avg > 0
-    s_netflow = netflow_avg7d and netflow_avg7d > 0
+    s_netflow = netflow_m and netflow_m > 0
     s_ratio = alt_btc_ratio and alt_btc_ratio > 1.5
     s_index = season_idx and season_idx > 75
     count_active = sum([bool(x) for x in [s_ethbtc, s_funding, s_netflow, s_ratio, s_index]])
@@ -233,17 +226,14 @@ def build_report():
     lines.append(f"4️⃣ ETH/BTC 7d change: {ethbtc_7d:+.2f}% {'✅' if s_ethbtc else ''}" if ethbtc_7d is not None else "4️⃣ ETH/BTC 7d change: N/A")
     lines.append(f"5️⃣ DeFi TVL 7d change: {defi_7d:+.2f}% 🧭" if defi_7d is not None else "5️⃣ DeFi TVL 7d change: N/A 🧭")
     lines.append(f"6️⃣ Funding Rate avg: {funding_avg:+.6f} {'📈' if funding_avg >= 0 else '📉'}" if funding_avg is not None else "6️⃣ Funding Rate avg: N/A")
-    if netflow_m is not None and netflow_avg7d is not None:
-        lines.append(f"7️⃣ Stablecoin Netflow (CEX): {netflow_m:,.2f} M (7d avg: {netflow_avg7d:,.2f} M)")
-    else:
-        lines.append("7️⃣ Stablecoin Netflow (CEX): N/A")
+    lines.append(f"7️⃣ Stablecoin Netflow (CEX): {netflow_m:+.0f} M {'🔼' if netflow_m >= 0 else '🔽'}" if netflow_m is not None else "7️⃣ Stablecoin Netflow (CEX): N/A")
     lines.append(f"8️⃣ Alt/BTC Volume Ratio: {alt_btc_ratio:.2f} {'✅' if s_ratio else ''}" if alt_btc_ratio is not None else "8️⃣ Alt/BTC Volume Ratio: N/A")
     lines.append(f"9️⃣ Altcoin Season Index (BC): {season_idx} {'🟢' if s_index else ''}" if season_idx is not None else "9️⃣ Altcoin Season Index (BC): N/A")
 
     lines += ["", "— <b>Tín hiệu kích hoạt</b>:"]
     lines.append(f"{'✅' if s_ethbtc else '❌'} ETH/BTC > +3% (7d)")
     lines.append(f"{'✅' if s_funding else '❌'} Funding Rate dương")
-    lines.append(f"{'✅' if s_netflow else '❌'} Stablecoin Netflow > 0 (7d avg)")
+    lines.append(f"{'✅' if s_netflow else '❌'} Stablecoin Netflow > 0")
     lines.append(f"{'✅' if s_ratio else '❌'} Alt/BTC Volume Ratio > 1.5")
     lines.append(f"{'✅' if s_index else '❌'} Altcoin Season Index > 75")
 
