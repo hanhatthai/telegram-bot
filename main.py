@@ -191,14 +191,10 @@ def get_altcoin_season_index():
             if 0 <= val <= 100:
                 return val
     return None
-    # main.py
-# ... (nguyên phần import, helpers, fetchers như code của bạn) ...
 
 # ----------------- Report -----------------
 def build_report():
     now = dt.datetime.now(HCM_TZ).strftime("%Y-%m-%d %H:%M")
-
-    # Lấy dữ liệu gốc
     btc_dom = get_btc_dominance()
     total_mc = get_total_market_cap_usd()
     altcap = get_altcoin_market_cap_est()
@@ -209,7 +205,6 @@ def build_report():
     alt_btc_ratio = get_alt_btc_spot_volume_ratio()
     season_idx = get_altcoin_season_index()
 
-    # Điều kiện tín hiệu
     s_ethbtc = ethbtc_7d and ethbtc_7d > 3
     s_funding = funding_avg and funding_avg > 0
     s_netflow = netflow_m and netflow_m > 0
@@ -217,7 +212,6 @@ def build_report():
     s_index = season_idx and season_idx > 75
     count_active = sum([bool(x) for x in [s_ethbtc, s_funding, s_netflow, s_ratio, s_index]])
 
-    # Xác định mức cảnh báo
     level = None
     if count_active >= 4 and s_index:
         level = "Altseason Confirmed"
@@ -226,12 +220,7 @@ def build_report():
     elif 2 <= count_active <= 3:
         level = "Early Signal"
 
-   # Format báo cáo
     lines = [f"📊 <b>Crypto Daily Report</b> — {now} (GMT+7)", ""]
-
-    def fmt_change(short, long, desc):
-        return f"   ↳ Ngắn hạn (4h): {short if short is not None else 'N/A'} ⇒ {desc}\n   ↳ Dài hạn (24h): {long if long is not None else 'N/A'} ⇒ {desc}"
-
     lines.append(f"1️⃣ BTC Dominance: {btc_dom:.2f}% 🧊" if btc_dom is not None else "1️⃣ BTC Dominance: N/A 🧊")
     lines.append(f"2️⃣ Total Market Cap: {_fmt_usd(total_mc)} 💰" if total_mc is not None else "2️⃣ Total Market Cap: N/A 💰")
     lines.append(f"3️⃣ Altcoin Market Cap (est): {_fmt_usd(altcap)} 🔷" if altcap is not None else "3️⃣ Altcoin Market Cap (est): N/A 🔷")
@@ -242,39 +231,26 @@ def build_report():
     lines.append(f"8️⃣ Alt/BTC Volume Ratio: {alt_btc_ratio:.2f} {'✅' if s_ratio else ''}" if alt_btc_ratio is not None else "8️⃣ Alt/BTC Volume Ratio: N/A")
     lines.append(f"9️⃣ Altcoin Season Index (BC): {season_idx} {'🟢' if s_index else ''}" if season_idx is not None else "9️⃣ Altcoin Season Index (BC): N/A")
 
-    # Tín hiệu kích hoạt
-    lines += ["", "📌 <b>Tín hiệu kích hoạt:</b>"]
+    lines += ["", "— <b>Tín hiệu kích hoạt</b>:"]
     lines.append(f"{'✅' if s_ethbtc else '❌'} ETH/BTC > +3% (7d)")
     lines.append(f"{'✅' if s_funding else '❌'} Funding Rate dương")
     lines.append(f"{'✅' if s_netflow else '❌'} Stablecoin Netflow > 0")
     lines.append(f"{'✅' if s_ratio else '❌'} Alt/BTC Volume Ratio > 1.5")
     lines.append(f"{'✅' if s_index else '❌'} Altcoin Season Index > 75")
 
-    # Xác nhận altseason
-    lines += ["", "📊 <b>Xác nhận Altcoin Season:</b>"]
-    lines.append(f"✅ {count_active}/5 chỉ báo đạt ngưỡng tích cực")
-    if count_active >= 4:
-        lines.append("✅ Ngắn hạn & Dài hạn đồng thuận")
-
-    # Cảnh báo và ước tính
     if level:
-        lines += ["", "⚠️ <b>Cảnh báo:</b>"]
+        lines += ["", "— <b>Cảnh báo Altseason</b>:"]
         if level == "Altseason Confirmed":
-            lines.append("🔥 Altseason Confirmed — khả năng cao đang bước vào Altseason")
+            lines.append("🔥 <b>Altseason Confirmed</b> — khả năng trong ~1–2 tuần")
         elif level == "Strong Signal":
-            lines.append("🔥 Strong Signal — nhiều điều kiện đã kích hoạt")
+            lines.append("🔥 <b>Strong Signal</b> — nhiều điều kiện đã kích hoạt")
         elif level == "Early Signal":
-            lines.append("🔥 Early Signal — xu hướng đang hình thành, cần theo dõi")
+            lines.append("🔥 <b>Early Signal</b> — đang hình thành, cần theo dõi")
 
-    lines.append(f"\n⏱ <b>Ước tính:</b> {estimate_days}")
-
-    # Ghi chú
-    lines += ["", "📝 <b>Ghi chú:</b>",
-              "• Stablecoin netflow dương ⇒ dòng tiền sắp giải ngân.",
+    lines += ["", "— <i>Ghi chú</i>:", "• Stablecoin netflow dương ⇒ dòng tiền sắp giải ngân.",
               "• Alt/BTC volume ratio > 1.5 ⇒ altcoin volume vượt BTC.",
               "• Altseason Index > 75 ⇒ xu hướng altseason rõ ràng.",
               "<i>Code by: HNT</i>"]
-
     return "\n".join(lines)
 
 # ----------------- Telegram -----------------
